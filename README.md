@@ -18,7 +18,7 @@ Currently:
 
 
 ## Screenshots
-![summary](summary.png)  
+![summary](summary.PNG)  
 ![portfolio gain](portfolio_gain.png)
 ![annualised returns_holdings](annualised_returns_holdings.png)
 
