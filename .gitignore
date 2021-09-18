@@ -1,0 +1,11 @@
+# config file, etc
+config.py
+deprecated/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ipynb folder
+.ipynb_checkpoints/
