@@ -7,24 +7,17 @@ from datetime import datetime
 import sys
 
 # TODO:
-# Allow exchanges other than ASX
 # Add brokerage column into cost base calculation
 # Allow specification of a subset of dates when plotting portfolio performance
 # calc_stockdata - change time(t) to be days, not business days
-# calc_stockdata - check whether supplied date argument is a business day
+# stock_summary - check whether supplied date argument is a business day
 # Dividend metrics
 # csv file columns case insensitive
 # allow for multiple sales or purcahses in a single day
 # add dollar weighted return calculation
-# Calculate annualised returns in stock_summary()
 # Add first purchase date in stock_summary()
-# Add totals in stock_summary()
-# Restructured dataframes using multindexes
-# incorporate dataframe styles
 # Print time period when displaying summary table and summary plots
 # total return - last value before all shares sold
-# finish correction to gain_tot
-# Correct MDR calc when adjustments are used
 # Date to US format
 
 ###################################################################################################
@@ -394,22 +387,6 @@ def stock_summary(cash_flows, shares, price, accum, val, index, date=None, style
                                                                     'Time Weighted Return (%)']))
                       .background_gradient(cmap=cmap, vmin=-10, vmax=10, 
                                     subset=(len(df)-1, ['Annualised Return (%)',
-                                                        'Annualised Time Weighted Return (%)'])))   
+                                                        'Annualised Time Weighted Return (%)'])))
           
     return df
-
-
-# Run the script
-if __name__ == "__main__":
-    #fname = 'shares_check_QBE_COL.csv'
-    #fname = 'Portfolio 2019-20 updated.CSV'
-    #fname = 'shares_check_AMP_CBA.csv'
-    fname = 'sample_portfolio.csv'
-    index='SPY'
-    import_a = get_userdata(fname)
-    merged_portfolio = merge_pricedata(import_a, index)
-    portfolio = process_data(merged_portfolio)
-    val, cash_flows, price, accum, shares = extract_parameters(portfolio)
-    summary = stock_summary(cash_flows, shares, price, accum, val, index, date=None, styles=False)
-
-
