@@ -18,9 +18,9 @@ Currently:
 
 
 ## Screenshots
-![summary](summary.PNG)  
-![portfolio gain](portfolio_gain.png)
-![annualised returns_holdings](annualised_returns_holdings.png)
+![summary](screenshots/summary.PNG)  
+![portfolio gain](screenshots/portfolio_gain.png)
+![annualised returns_holdings](screenshots/annualised_returns_holdings.png)
 
 
 ## Contents
@@ -61,7 +61,7 @@ The default is `index = 'SPY'` which is an index fund aiming to track the S&P500
 A .csv file containing the user's stock portfolio data should be placed in the root directory of the repo.
 The naming of the columns should be as follows:<br/>
 
-![CSV example](csv_example.png)
+![CSV example](screenshots/csv_example.png)
 
 **Company:** Company stock ticker<br/>
 The stock ticker needs to recognised by Yahoo finance. If unsure, check on the Yahoo finance website.<br/>
