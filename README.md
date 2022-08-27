@@ -61,7 +61,7 @@ The default is `index = 'SPY'` which is an index fund aiming to track the S&P500
 A .csv file containing the user's stock portfolio data should be placed in the root directory of the repo.
 The naming of the columns should be as follows:<br/>
 
-![CSV example](screenshots/csv_example.png)
+![CSV example](screenshots/csv_example.png?)
 
 **Company:** Company stock ticker<br/>
 The stock ticker needs to recognised by Yahoo finance. If unsure, check on the Yahoo finance website.<br/>
@@ -99,6 +99,7 @@ Cash flows are weighted according to the amount of time they have been part of t
 An annualized total return is the geometric average amount of money earned by an investment each 
 year over a given time period. The annualized return formula is calculated as a geometric average 
 to show what an investor would earn over a period of time if the annual return was compounded.
+
 
 
 
