@@ -124,12 +124,13 @@ def merge_pricedata(portfolio, index):
                           columns=cols)
                                  
         # Merge portfolio and prices dataframes
-        portfolio = pd.merge(portfolio, df, how='outer', left_index=True, right_index=True)
+        portfolio = pd.merge(portfolio, df, how='outer', 
+                             left_index=True, right_index=True).drop_duplicates()
 
     print('API call complete\n')
         
     # Set to 'Business day' datetime frequency
-    portfolio = portfolio.sort_index().asfreq(freq='B') 
+    #portfolio = portfolio.sort_index().asfreq(freq='B') 
     
     return portfolio
 
