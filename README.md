@@ -1,3 +1,9 @@
+# Update March 2023
+#### **Now deployable as a Streamlit app!<br/>**
+#### **API key no longer required!<br/>**
+<br/>
+
+
 # Portfolio tracker
 
 Portfolio tracker tracks the perfomance of a portfolio of equities against a benchmark index.
@@ -8,7 +14,7 @@ Currently:
 
 * Reads user portfolio data including stock purchases and sales
 * Allows input of a reference stock ticker that can be used benchmark against portfolio performance
-* Gets historical stock price data using a Yahoo finance API
+* Gets historical stock price data using the yfinance library
 * Report a summary table of each stock holding, including current price, average price, daily and total % gain
 * Plots portfolio gain metrics including Basic return and Time Weighted return (Modified Dietz return) aginst the return of the benchmark index
 * Plots the percentage gain of each stock holding
@@ -29,31 +35,28 @@ Currently:
 3. **Dependencies**
 4. **Metrics**
 
+
 ## 1. Installation
+
+### Option 1: Streamlit App
+
+
+### Option 2: Jupyter Notebook
 
 1. This project runs as a Jupyter notebook. Installation details can be found here:
 https://jupyter.org/install.html
 
-2. Historical stock price data is downloaded using the Yahoo Finance API which is hosted by Rapid API.
-This is a freemium API, with the free version limited only by a monthly limit on the number of API calls.
-Head to the Rapid API website to subscribe to the API:<br/>
-https://rapidapi.com/apidojo/api/yahoo-finance1/endpoints <br/>
-You will then be provided with an API key.
+2. Clone the repo from Github
 
-3. Clone the repo from Github
-
-4. Create a new file named `Config.py` in the root directory. Open with your preferred editor and add your API key details<br/>
-eg, `API_key = "a4d5hr5j6l7lfn3n6nnlgb"`
-
-5. Open the `<main.ipynb>` Jupyter notebook <br>
+3. Open the `<main.ipynb>` Jupyter notebook <br>
 [Portfolio tracker Jupyter notebook](https://github.com/ThomasKillin/portfolio-tracker/blob/main/main.ipynb)
 
-6. In the user input cell, input the file location of the share portfolio<br/>
+4. In the user input cell, input the file location of the share portfolio<br/>
 eg, `'filename = sample_portfolio.csv'`<br/>
 Input the ticker of a stock to compare the portfolio to (optional)<br/>
 The default is `index = 'SPY'` which is an index fund aiming to track the S&P500 index. 
 
-7. Run all cells
+5. Run all cells
 
 
 ## 2. Usage
@@ -72,10 +75,6 @@ See here for valid exchange suffixes [Exchange suffixes](exchange_suffix.md)<br/
 **Adjustments:** (Optional column) This column allow for a cost base adjustment to be made. Eg, if a company restructure takes place, 
 a portion of the cost base may be split into a new entity. The number entered into the '_Adjustments_' column represents
 the portion of the cost base that is to be removed. I.e, a value of `-0.1` indicates a 10% reduction in the cost base.<br/>
-
-
->** Note there are API limits on number of calls per min. For the free version of the API key, up to 500 calls per month are allowed.<br>
-> Check on the API dashboard if unsure if the limit has been reached.**
 
 
 ## 3. Dependencies

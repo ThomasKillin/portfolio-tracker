@@ -1,6 +1,7 @@
 # config file, etc
 config.py
 deprecated/
+default portfolio/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

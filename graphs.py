@@ -9,8 +9,8 @@ import performance_calcs as calc
 #stock_tickers_selection = stocks
 def plot_portfolio_gain(val, cash_flows, index_price, date=None):
 
-    init_CF = (True if date == None else False)
-    
+    #init_CF = (True if date == None else False)
+    init_CF = (val.shape == val[date:].shape)
     #plt.plot(dh.index, (dh['IDX_benchmark'] - dh['IDX_benchmark'][0]) / 
     #         dh['IDX_benchmark'][0] * 100, label='benchmark_index')    
     
@@ -53,6 +53,8 @@ def plot_portfolio_gain(val, cash_flows, index_price, date=None):
     # Adjust space between subplots
     fig1.subplots_adjust(wspace=.25)
     plt.show()    
+    
+    return fig1
 
 
     
@@ -90,6 +92,8 @@ def plot_stock_gain(val, cash_flows, date=None, use_initial_CF=False):
     #fig1.subplots_adjust(wspace=.25)
     plt.show()
     
+    return fig1
+    
 def plot_stock_holdings(val, date=None):
     
     ### PLOT HOLDINGS OF EACH STOCK
@@ -105,10 +109,12 @@ def plot_stock_holdings(val, date=None):
     ax1.grid(True)
     plt.show()
     #ax3.figure.autofmt_xdate()
+    
+    return fig1
 
 def plot_annualised_return(val, cash_flows, index_price, date=None, use_initial_CF=False):
     
-    plt.figure(figsize=(4.25, 3.5), dpi=150)
+    fig1 = plt.figure(figsize=(4.25, 3.5), dpi=150)
     br = (calc.basic_return_annualised(val, cash_flows, date=date, 
                                        use_initial_CF=use_initial_CF).iloc[-1] * 100)
     br = br[br!=0]
@@ -132,3 +138,5 @@ def plot_annualised_return(val, cash_flows, index_price, date=None, use_initial_
     plt.ylabel('Gain (%)')
     plt.grid(axis='x')
     plt.show()
+    
+    return fig1

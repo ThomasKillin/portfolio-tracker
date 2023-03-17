@@ -1,10 +1,10 @@
-import yahoo_finance_API as API
 import performance_calcs as calc
 import pandas as pd
 import numpy as np
 import seaborn as sns
-from datetime import datetime
+#from datetime import datetime
 import sys
+import yfinance as yf
 
 # TODO:
 # Add brokerage column into cost base calculation
@@ -99,10 +99,12 @@ def merge_pricedata(portfolio, index):
         price data over the time frame convered by the portfolio
 
     '''
+    
     # Portfolio start and end time for extracting data using API   
     start_date = min(portfolio.index)
-    start_time = int(start_date.timestamp())
-    end_time = int(datetime.today().replace(second=0, microsecond=0).timestamp())  
+    start_time = start_date.strftime("%Y-%m-%d")
+    #start_time = int(start_date.timestamp())
+    #end_time = datetime.today().replace(second=0, microsecond=0).strftime("%m/%d/%Y")  
     
     # Fetch stock prices using API and merge with trading data 
     inputdata = {}
@@ -111,26 +113,25 @@ def merge_pricedata(portfolio, index):
     # Extract list of portfolio tickers
     tickers = list(portfolio.columns.levels[1]) + [index]
     for i in tickers:
-        
+
         # Extract price data using API
-        retdata = API.fetchStockData(i, start_time, end_time)
-        inputdata["Timestamp"] = API.parseTimestamp(retdata)
-        inputdata["Values"] = API.parseValues(retdata)
+        inputdata = yf.download(i, start=start_time, progress=False)
         
         # Convert price data into dataframe
         cols = pd.MultiIndex.from_arrays([['$'], [i]], names = ['Params', 'Company'])        
-        df = pd.DataFrame(inputdata['Values'], 
-                          index=pd.to_datetime(inputdata['Timestamp'], format='%m/%d/%Y'),
+        df = pd.DataFrame(inputdata['Close'].values, 
+                          index=inputdata.index,
                           columns=cols)
                                  
         # Merge portfolio and prices dataframes
         portfolio = pd.merge(portfolio, df, how='outer', 
                              left_index=True, right_index=True).drop_duplicates()
+        
 
     print('API call complete\n')
         
     # Set to 'Business day' datetime frequency
-    #portfolio = portfolio.sort_index().asfreq(freq='B') 
+    portfolio = portfolio.sort_index().asfreq(freq='B') 
     
     return portfolio
 
@@ -286,14 +287,16 @@ def stock_summary(cash_flows, shares, price, accum, val, index, date=None, style
         Summary dataframe.
 
     '''   
+
+    init_CF = (price.shape == price[date:].shape)
+    
     cash_flows = cash_flows[date:]
     shares = shares[date:]
     accum = accum[date:]
     price = price[date:]
     val = val[date:]
-
     
-    init_CF = (True if date == None else False)
+    #init_CF = (True if date == None else False) 
     
     df = pd.DataFrame()
     df.index.name = 'Company'
