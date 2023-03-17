@@ -53,13 +53,13 @@ def display_calc_details():
 
 def display_readme():
     st.image(os.path.join('screenshots','banner.png'))
-    st.image('screenshots/st_title.PNG')   
+    st.image(os.path.join('screenshots','st_title.png'))   
     st.text('')
     st.markdown('##### Portfolio tracker tracks the performance of a portfolio of shares against a benchmark index.  \n'
                 'The user\'s share portfolio should be saved as a csv file. Details of how to format the file are given below.')
     st.text('')
     st.subheader('CSV file details :point_down:')
-    st.image('screenshots/csv_example.PNG')
+    st.image(os.path.join('screenshots','csv_example.png'))
     st.markdown('**Company:** Company stock ticker')
     st.markdown('The stock ticker needs to recognised by Yahoo finance. If unsure, check on the Yahoo finance website.')
     st.markdown('**Shares:** Number of shares bought or sold (negative number = sold)')
@@ -74,7 +74,7 @@ def display_data():
     
     if 'portfolio' in st.session_state:     
         
-        st.image('screenshots/banner.PNG')
+        st.image(os.path.join('screenshots','banner.png'))
         
         #st.session_state['display'] = True
         
