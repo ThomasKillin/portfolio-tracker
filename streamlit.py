@@ -52,7 +52,7 @@ def display_calc_details():
 
 
 def display_readme():
-    st.image('screenshots/banner.PNG')
+    st.image(os.path.join('screenshots','banner.PNG'))
     st.image('screenshots/st_title.PNG')   
     st.text('')
     st.markdown('##### Portfolio tracker tracks the performance of a portfolio of shares against a benchmark index.  \n'
