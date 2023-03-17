@@ -1,5 +1,6 @@
 # Update March 2023
 #### **Now deployable as a Streamlit app!<br/>**
+https://thomaskillin-portfolio-tracker-streamlit-v1p5r9.streamlit.app/
 #### **API key no longer required!<br/>**
 <br/>
 
@@ -39,6 +40,8 @@ Currently:
 ## 1. Installation
 
 ### Option 1: Streamlit App
+
+https://thomaskillin-portfolio-tracker-streamlit-v1p5r9.streamlit.app/
 
 
 ### Option 2: Jupyter Notebook
