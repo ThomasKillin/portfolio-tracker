@@ -5,7 +5,9 @@ https://thomaskillin-portfolio-tracker-streamlit-v1p5r9.streamlit.app/
 <br/>
 
 
-# Portfolio tracker
+![title](screenshots/banner_resize.PNG)
+
+<br/>
 
 Portfolio tracker tracks the perfomance of a portfolio of equities against a benchmark index.
 
