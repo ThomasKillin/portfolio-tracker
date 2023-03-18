@@ -5,7 +5,7 @@ https://thomaskillin-portfolio-tracker-streamlit-v1p5r9.streamlit.app/
 <br/>
 
 
-![title](screenshots/banner_resize.PNG)
+![banner_resize](screenshots/banner_resize.png)
 
 <br/>
 
