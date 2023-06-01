@@ -97,6 +97,7 @@ def basic_return(val, cash_flows, date=None, use_initial_CF=False):
     return basic_ret
 
 
+
 def basic_return_annualised(val, cash_flows, date=None, use_initial_CF=False):
     '''
     Annualized Return = (1 + basic_return())**(years held) - 1

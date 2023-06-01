@@ -19,6 +19,11 @@ import yfinance as yf
 # Print time period when displaying summary table and summary plots
 # total return - last value before all shares sold
 # Date to US format
+# fix average price calc for reduced data range
+# fix graph legend if single stock holding
+# add support for multiple currencies
+# add dividends
+# Add automatic control of stock splits
 
 ###################################################################################################
 def get_userdata(filename):
@@ -115,14 +120,24 @@ def merge_pricedata(portfolio, index):
     for i in tickers:
 
         # Extract price data using API
-        inputdata = yf.download(i, start=start_time, progress=False)
+        #inputdata = yf.download(i, start=start_time, progress=False)
+        inputdata = (yf.Ticker(i).history(start=start_time, auto_adjust=False)
+                     .tz_localize(None))
         
         # Convert price data into dataframe
-        cols = pd.MultiIndex.from_arrays([['$'], [i]], names = ['Params', 'Company'])        
-        df = pd.DataFrame(inputdata['Close'].values, 
+        #cols = pd.MultiIndex.from_arrays([['$'], [i]], names = ['Params', 'Company'])        
+        cols = pd.MultiIndex.from_arrays([['$', 'Div'], [i, i]], 
+                                         names = ['Params', 'Company'])
+        
+        #df = pd.DataFrame(inputdata['Close'].values, 
+        #                  index=inputdata.index,
+        #                  columns=cols)
+        
+        df = pd.DataFrame(inputdata[['Close', 'Dividends']].values, 
                           index=inputdata.index,
                           columns=cols)
-                                 
+                
+                         
         # Merge portfolio and prices dataframes
         portfolio = pd.merge(portfolio, df, how='outer', 
                              left_index=True, right_index=True).drop_duplicates()
@@ -163,13 +178,19 @@ def process_data(merged_portfolio):
     idx = pd.IndexSlice
     
     # Handle Na values in stock prices.
-    merged_portfolio.loc[:, idx['$', :]] = (merged_portfolio.loc[:, idx['$', :]]
-                                            .fillna(method='ffill')
-                                            .fillna(0))    
+    #merged_portfolio.loc[:, idx['$', :]] = (merged_portfolio.loc[:, idx['$', :]]
+    #                                        .fillna(method='ffill')
+    #                                        .fillna(0))    
     
-    # Fill Na values in Shares and Price column
-    merged_portfolio.loc[:, idx[['Shares', 'Price'], :]] = (
-                                    merged_portfolio.loc[:, idx[['Shares', 'Price'], :]].fillna(0))
+    merged_portfolio['$'] = merged_portfolio['$'].fillna(method='ffill').fillna(0)
+    
+    
+    # Fill Na values in Shares and Price and Div column
+    merged_portfolio.loc[:, idx[['Shares', 'Price', 'Div'], :]] = (
+                                    merged_portfolio.loc[:, idx[['Shares', 'Price', 'Div'], :]].fillna(0))
+    #merged_portfolio[['Shares', 'Price', 'Div']] = merged_portfolio[['Shares', 'Price', 'Div']].fillna(0)
+    
+    
     
     # Accumulated shares  
     Accum = (merged_portfolio['Shares'][~np.isnan(merged_portfolio['Shares'])].cumsum()
@@ -187,21 +208,32 @@ def process_data(merged_portfolio):
     Buy_amt = ((merged_portfolio['Price'] * merged_portfolio['Shares'])
                .fillna(0))    
     
+    
     # Cash flow adjustments due to demerger/acquisition event.
     if 'Adjustments' in merged_portfolio.columns:
-        merged_portfolio.loc[:, idx['Adjustments', :]] = (
-                                        merged_portfolio.loc[:, idx['Adjustments', :]].fillna(0))
+        #merged_portfolio.loc[:, idx['Adjustments', :]] = (
+        #                                merged_portfolio.loc[:, idx['Adjustments', :]].fillna(0))
+        
+        merged_portfolio['Adjustments'] = merged_portfolio['Adjustments'].fillna(0)
+        
+        # Use .loc for Adjustments to maintain the multiindex columns
         Buy_amt = Buy_amt + merged_portfolio.loc[:, idx['Adjustments', :]] * Buy_amt.cumsum()     
-    
+        
         # Reset column names
         Buy_amt.columns = pd.MultiIndex.from_product([['Buy_amt'], 
                                                       Buy_amt.columns.get_level_values(1)],
-                                                     names = ['Params', 'Company'])    
-    
+                                                      names = ['Params', 'Company'])    
+        
+        # Add adjustments into Dividends
+        merged_portfolio['Div'] = (merged_portfolio['Div']
+                                   + merged_portfolio['Adjustments']
+                                   * merged_portfolio['Div'].cumsum()) 
+                                   
     else:
         # Reset column names
         Buy_amt.columns = pd.MultiIndex.from_product([['Buy_amt'], Buy_amt.columns],
                                                      names = ['Params', 'Company']) 
+    
         
     # Concatenate processed data with original dataframe
     merged_portfolio = pd.concat([merged_portfolio, Buy_amt, Accum, Val], axis=1)
@@ -236,8 +268,9 @@ def extract_parameters(processed_portfolio):
     price = processed_portfolio['$']
     accum = processed_portfolio['Accum']
     shares = processed_portfolio['Shares']
+    div = processed_portfolio['Div'] * accum
     
-    return val, cash_flows, price, accum, shares
+    return val, cash_flows, price, accum, shares, div
     
 
 '''        
@@ -361,7 +394,7 @@ def stock_summary(cash_flows, shares, price, accum, val, index, date=None, style
     df.loc[end_idx, 'Time Weighted Return (%)'] = df.loc[end_idx, 'Total Return (%)']
     df.loc[end_idx, 'Annualised Time Weighted Return (%)'] = df.loc[end_idx, 'Annualised Return (%)']
     
-    if styles == True:     
+    if styles:     
         # DATAFRAME STYLES
         # Set colormap using Seaborn palette
         cmap = sns.diverging_palette(20, 145, s=60, as_cmap=True)
@@ -374,8 +407,7 @@ def stock_summary(cash_flows, shares, price, accum, val, index, date=None, style
                                                     'Total Return (%)': "{:.2f}", 
                                                     'Annualised Return (%)': "{:.2f}",
                                                     'Time Weighted Return (%)': "{:.2f}",
-                                                    'Annualised Time Weighted Return (%)': "{:.2f}"})         
-                      .hide_index()
+                                                    'Annualised Time Weighted Return (%)': "{:.2f}"})
                       .background_gradient(cmap=cmap, vmin=-2, vmax=2, 
                                            subset=(slice(len(df)-3), 'Daily Return (%)'))
                       .background_gradient(cmap=cmap, vmin=-100, vmax=100, 

@@ -36,7 +36,7 @@ def process_data(merged_portfolio):
 
 
 def display_calc_details():
-    with st.expander(":question: Calculation   \ndetails", expanded=False):
+    with st.expander(":question: Calculation  \ndetails", expanded=False):
         st.markdown('Some of the following metrics are used to characterise the portfolio:')
         st.markdown('https://www.kitces.com/blog/twr-dwr-irr-calculations-performance-reporting-software-methodology-gips-compliance/')
         st.markdown('1. **Basic return**')
@@ -77,58 +77,52 @@ def display_data():
         st.image(os.path.join('screenshots','banner.png'))
         
         #st.session_state['display'] = True
-        
-        start_date = st.date_input(':date: Select start date', 
-                                    min_value = st.session_state['portfolio'].index[0],
-                                    max_value = st.session_state['portfolio'].index[-2],
-                                    value = st.session_state['portfolio'].index[0],
-                                    on_change=display_data)
-        st.session_state['start_date'] = start_date
+        with st.sidebar:
+            start_date = st.date_input(':date: Select start date', 
+                                        min_value = st.session_state['portfolio'].index[0],
+                                        max_value = st.session_state['portfolio'].index[-2],
+                                        value = st.session_state['portfolio'].index[0],
+                                        on_change=display_data)
+            st.session_state['start_date'] = start_date
         
         # Extract variables for performance calculations
-        val, cash_flows, price, accum, shares = share.extract_parameters(st.session_state['portfolio'])
+        val, cash_flows, price, accum, shares, div = share.extract_parameters(st.session_state['portfolio'])
     
         summary = share.stock_summary(cash_flows, shares, price, accum, val, index, 
                                       date=st.session_state['start_date'])   
         
         # Generate figures
-        fig1 = graph.plot_portfolio_gain(val, cash_flows, price[index],
+        fig1 = graph.plot_portfolio_gain_plotly(val, cash_flows, price[index],
                                          date=st.session_state['start_date'])
-        fig2 = graph.plot_stock_gain(val, cash_flows, 
+        fig2 = graph.plot_stock_gain_plotly(val, cash_flows, 
                                      date=st.session_state['start_date'])
-        fig3 = graph.plot_stock_holdings(val, 
+        fig3 = graph.plot_stock_holdings_plotly(val, 
                                          date=st.session_state['start_date'])
-        fig4 = graph.plot_annualised_return(val, cash_flows, price[index], 
+        fig4 = graph.plot_annualised_return_plotly_(val, cash_flows, price[index], 
                                             date=st.session_state['start_date'])
         
-        with st.expander(':heavy_dollar_sign: Portfolio details', expanded=True):
-            st.dataframe(summary, use_container_width=True)  
+          
         
         tab1, tab2, tab3 = st.tabs(['Portfolio Gain', "Stock Gain", "Stock details"])    
         
         with tab1:
-            col1, col2, _ = st.columns([0.6, 3, 0.6])
-            with col1:
-                display_calc_details()
-            with col2:
-                st.pyplot(fig1)
+            st.plotly_chart(fig1)
+            col1, col2, _ = st.columns([0.6, 3, 0.6])               
         
         with tab2:
-            col1, col2, _ = st.columns([1.2, 3, 1.2])
-            with col1:
-                display_calc_details()
-            with col2:
-                st.pyplot(fig2)
+            st.plotly_chart(fig2)
         
         with tab3:
-            col1, col2, col3, _ = st.columns([1,3.0,3.0,1])
+            col1, col2 = st.columns([1, 1])
             with col1:
-                display_calc_details()
-            with col2:
-                st.pyplot(fig3)    
-            with col3:    
-                st.pyplot(fig4)
-                
+                st.plotly_chart(fig3)    
+            with col2:    
+                st.plotly_chart(fig4)
+        
+        st.dataframe(summary, use_container_width=True)
+        
+        display_calc_details()
+            
     if 'portfolio' not in st.session_state: 
         display_readme()
         
@@ -149,6 +143,12 @@ with st.sidebar:
     index_select = st.selectbox(':chart_with_upwards_trend: Enter the stock index to compare to', indices)
     # Extract the ticker from the string
     index = index_select.split(':')[0]
+    
+    manual = st.checkbox('Input index manually')
+    if manual:
+        index = st.text_input('Input stock ticker')
+    
+    
                          
     #st.session_state['index'] = index
     file = st.file_uploader(':open_file_folder: Select the stock portfolio data in csv format', 
