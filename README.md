@@ -1,6 +1,7 @@
 # Update March 2023
 #### **Now deployable as a Streamlit app!<br/>**
-https://thomaskillin-portfolio-tracker-streamlit-vw6fag.streamlit.app/
+https://thomaskillin-portfolio-tracker-streamlit-df3gks.streamlit.app/
+
 #### **API key no longer required!<br/>**
 <br/>
 
