@@ -60,12 +60,20 @@ def plot_portfolio_gain(val, cash_flows, index_price, date=None):
     return fig1
 
 
-
-def plot_portfolio_gain_plotly(val, cash_flows, index_price, date=None):
+def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, date=None, calc_method='basic'):
     
     init_CF = (val.shape == val[date:].shape)
     
     colors = px.colors.sequential.Aggrnyl
+    
+    if calc_method == 'basic':
+        y1 = calc.basic_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
+        y2 = (calc.time_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100)[0]
+        y3 = calc.basic_return(index_price, pd.Series(0, index=index_price.index), date=date) * 100
+    elif calc_method == 'total':
+        y1 = calc.basic_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
+        y2 = (calc.time_weighted_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100)[0]
+        y3 = calc.basic_total_return(index_price, pd.Series(0, index=index_price.index), div, date=date) * 100
     
     # Create subplot for portfolio gain vs. time
     fig = make_subplots(rows=1, cols=2, 
@@ -74,22 +82,19 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, date=None):
     
     # Plot portfolio gain
     fig.add_trace(go.Scatter(x=val[date:].index,
-                             y=calc.basic_return(val.sum(axis=1), cash_flows.sum(axis=1), 
-                                                 date=date, use_initial_CF=init_CF) * 100,
+                             y=y1,
                              name="Basic Return",
                              legendgroup='group1',
                              mode='lines', line=dict(color=colors[0])), row=1, col=1)
     
     fig.add_trace(go.Scatter(x=val[date:].index,
-                             y=(calc.time_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), 
-                                                          date=date, use_initial_CF=init_CF) * 100)[0],
+                             y=y2,
                              name="Time Weighted Return",
                              legendgroup='group1',
                              line=dict(color=colors[3])), row=1, col=1)
     
     fig.add_trace(go.Scatter(x=index_price[date:].index,
-                             y=calc.basic_return(index_price, pd.Series(0, index=index_price.index), 
-                                                 date=date) * 100,
+                             y=y3,
                              name="Benchmark Index",
                              legendgroup='group1',
                              line=dict(color=colors[5])), row=1, col=1)
@@ -139,7 +144,7 @@ def plot_portfolio_gain_plotly_(val, cash_flows, index_price, date=None):
     
     # Calculate basic and time-weighted returns
     basic_return = calc.basic_return(val.sum(axis=1), 
-                                     cash_flows.sum(axis=1), 
+                                     cash_flows.sum(axis=1),
                                      date=date, 
                                      use_initial_CF=init_CF) * 100
     

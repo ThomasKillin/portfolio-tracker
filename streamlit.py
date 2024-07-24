@@ -93,13 +93,14 @@ def display_data():
         
         # Generate figures
         fig1 = graph.plot_portfolio_gain_plotly(val, cash_flows, price[index],
-                                         date=st.session_state['start_date'])
-        fig2 = graph.plot_stock_gain_plotly(val, cash_flows, 
-                                     date=st.session_state['start_date'])
-        fig3 = graph.plot_stock_holdings_plotly(val, 
-                                         date=st.session_state['start_date'])
-        fig4 = graph.plot_annualised_return_plotly_(val, cash_flows, price[index], 
+                                                date=st.session_state['start_date'],
+                                                calc_method='basic')
+        fig2 = graph.plot_stock_gain_plotly(val, cash_flows,
                                             date=st.session_state['start_date'])
+        fig3 = graph.plot_stock_holdings_plotly(val, 
+                                                date=st.session_state['start_date'])
+        fig4 = graph.plot_annualised_return_plotly_(val, cash_flows, price[index], 
+                                                    date=st.session_state['start_date'])
         
           
         
