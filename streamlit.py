@@ -69,7 +69,7 @@ def display_readme():
     st.markdown('a portion of the cost base may be split into a new entity. The number entered into the \'_Adjustments_\' column represents')
     st.markdown('the portion of the cost base that is to be removed. I.e, a value of `-0.1` indicates a 10% reduction in the cost base.')
     
-    
+
 def display_data():
     
     if 'portfolio' in st.session_state:     
@@ -86,13 +86,37 @@ def display_data():
             st.session_state['start_date'] = start_date
         
         # Extract variables for performance calculations
-        val, cash_flows, price, accum, shares, div = share.extract_parameters(st.session_state['portfolio'])
+        val, cash_flows, price, accum, shares, div, div_ = share.extract_parameters(st.session_state['portfolio'])
     
-        summary = share.stock_summary(cash_flows, shares, price, accum, val, index, 
-                                      date=st.session_state['start_date'])   
+        summary = share.stock_summary(st.session_state['portfolio'], index, 
+                                      date=st.session_state['start_date'],
+                                      calc_method='basic')   
+        
+        #if 'calc_option' not in st.session_state:
+        #    st.session_state['calc_option'] = "Basic return"
+        
+        #calc_option = st.radio(
+        #    "Select calculation method",
+        #    ["Basic return", 
+        #     "Total return"],
+        #    index=["Basic return", "Total return"].index(st.session_state['calc_option']),
+        #    captions = ["Return based on share price change only", 
+        #                "Return including share price change plus dividend income"])
+
+        #st.session_state['calc_option'] = calc_option
+        
+        #if calc_option == "Basic return":
+        #    st.session_state['calc_method'] = 'basic'
+        #    st.session_state['div'] = None
+        #else:
+        #    st.session_state['calc_method'] = 'total'
+        #    st.session_state['div'] = div 
+        #    st.session_state['portfolio'] = st.session_state['portfolio'] 
         
         # Generate figures
         fig1 = graph.plot_portfolio_gain_plotly(val, cash_flows, price[index],
+                                                div=div,
+                                                index_div=div_[index],
                                                 date=st.session_state['start_date'],
                                                 calc_method='basic')
         fig2 = graph.plot_stock_gain_plotly(val, cash_flows,
@@ -127,7 +151,8 @@ def display_data():
     if 'portfolio' not in st.session_state: 
         display_readme()
         
-         
+
+
 
 def get_and_display_data():
     

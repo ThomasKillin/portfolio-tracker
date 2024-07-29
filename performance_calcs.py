@@ -219,7 +219,7 @@ def basic_return_annualised(val, cash_flows, date=None, use_initial_CF=False):
     return basic_ret_ann    
 
 
-def basic_total_return_annualised(val, cash_flows, date=None, use_initial_CF=False):
+def basic_total_return_annualised(val, cash_flows, div, date=None, use_initial_CF=False):
     '''
     Annualized Return = (1 + basic_return())**(years held) - 1
     
@@ -253,6 +253,7 @@ def basic_total_return_annualised(val, cash_flows, date=None, use_initial_CF=Fal
     # Truncate based on date argument
     val = val.loc[date:]
     cash_flows = cash_flows.loc[date:]
+    div = div.loc[date:]
     
     # Find the first non-zero row of each col - which becomes the start date for calculating the
     # num_years. Set num_years to 1 if (val==0).all() to avoid divide by zero error

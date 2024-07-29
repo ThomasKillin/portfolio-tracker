@@ -293,8 +293,9 @@ def extract_parameters(processed_portfolio):
     accum = processed_portfolio['Accum']
     shares = processed_portfolio['Shares']
     div_tot = processed_portfolio['Div_tot']
+    div = processed_portfolio['Div']
     
-    return val, cash_flows, price, accum, shares, div_tot
+    return val, cash_flows, price, accum, shares, div_tot, div
     
 
 '''        
@@ -312,7 +313,7 @@ def extract_parameters(processed_portfolio):
 
 ###################################################################################################
 
-def stock_summary(cash_flows, shares, price, accum, val, index, date=None, styles=True):
+def stock_summary(portfolio, index, date=None, styles=True, calc_method='basic'):
     
     # Test for portfolio of single stock. (iloc[-1].values line will retuen an error)
     '''
@@ -344,7 +345,8 @@ def stock_summary(cash_flows, shares, price, accum, val, index, date=None, style
         Summary dataframe.
 
     '''   
-
+    val, cash_flows, price, accum, shares, div, div_ = extract_parameters(portfolio)
+    
     init_CF = (price.shape == price[date:].shape)
     
     cash_flows = cash_flows[date:]
@@ -365,17 +367,36 @@ def stock_summary(cash_flows, shares, price, accum, val, index, date=None, style
     df['Current Value'] = val.iloc[-1]
     df['Daily Return (%)'] = calc.daily_pct_gain(price.drop(labels=index, axis=1)).iloc[-1] * 100
     df.loc[df['Current Holdings'] == 0, 'Daily Return (%)'] = 0
-    df['Total Return (%)'] = (calc.basic_return(val, cash_flows, use_initial_CF=init_CF)
-                              .iloc[-1].values * 100)
-    df['Annualised Return (%)'] = (calc.basic_return_annualised(val, cash_flows, 
+    
+    if calc_method == 'basic':
+        df['Total Return (%)'] = (calc.basic_return(val, cash_flows, use_initial_CF=init_CF)
+                                  .iloc[-1].values * 100)
+        df['Annualised Return (%)'] = (calc.basic_return_annualised(val, cash_flows, 
                                                                 use_initial_CF=init_CF)
                                    .iloc[-1].values * 100)
-    df['Time Weighted Return (%)'] = (calc.time_weighted_return(
+        df['Time Weighted Return (%)'] = (calc.time_weighted_return(
                                             val, cash_flows, use_initial_CF=init_CF)
                                       .iloc[-1].values * 100)
-    df['Annualised Time Weighted Return (%)'] = ((calc.time_weighted_return_annualised(
+        df['Annualised Time Weighted Return (%)'] = ((calc.time_weighted_return_annualised(
                                                     val, cash_flows, use_initial_CF=init_CF)
                                                   .iloc[-1].values * 100))
+    
+    elif calc_method == 'total':
+        df['Total Return (%)'] = (calc.basic_total_return(val, cash_flows, div, use_initial_CF=init_CF)
+                                  .iloc[-1].values * 100)
+        df['Annualised Return (%)'] = (calc.basic_total_return_annualised(val, cash_flows, div, 
+                                                                use_initial_CF=init_CF)
+                                   .iloc[-1].values * 100)
+        df['Time Weighted Return (%)'] = (calc.time_weighted_total_return(
+                                            val, cash_flows, div, use_initial_CF=init_CF)
+                                      .iloc[-1].values * 100)
+        df['Annualised Time Weighted Return (%)'] = ((calc.time_weighted_total_return_annualised(
+                                                    val, cash_flows, div, use_initial_CF=init_CF)
+                                                  .iloc[-1].values * 100))
+    
+    else:
+        raise ValueError('Invalid calculation method. Please choose "basic" or "total".')
+    
     df = df.sort_index().reset_index()
     #di['Current Holdings'] = di['Current Holdings'].astype(int)
     

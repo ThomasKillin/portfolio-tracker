@@ -59,7 +59,7 @@ def plot_portfolio_gain(val, cash_flows, index_price, date=None):
     
     return fig1
 
-
+"""
 def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, date=None, calc_method='basic'):
     
     init_CF = (val.shape == val[date:].shape)
@@ -133,8 +133,109 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, date=None
     #fig.show()
     
     return fig
+"""
 
+def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div=None, date=None, calc_method='basic'):
+    
+    init_CF = (val.shape == val[date:].shape)
+    
+    colors = px.colors.sequential.Aggrnyl
+    
+    def calculate_returns(calc_method):
+        if calc_method == 'basic':
+            y1 = calc.basic_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
+            y2 = (calc.time_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100)[0]
+            y3 = calc.basic_return(index_price, pd.Series(0, index=index_price.index), date=date) * 100
+        elif calc_method == 'total':
+            y1 = calc.basic_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
+            y2 = (calc.time_weighted_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100)[0]
+            y3 = calc.basic_total_return(index_price, pd.Series(0, index=index_price.index), index_div, date=date) * 100
+        return y1.values.tolist(), y2.values.tolist(), y3.values.tolist()
+    
+    y1, y2, y3 = calculate_returns(calc_method)
+    
+    # Create subplot for portfolio gain vs. time
+    fig = make_subplots(rows=1, cols=2, 
+                        column_widths=[1, 1],
+                        subplot_titles=("<b>Portfolio Gain", "<b>Total Portfolio Value"))
+    
+    # Plot portfolio gain
+    fig.add_trace(go.Scatter(x=val[date:].index,
+                             y=y1,
+                             name="Basic Return",
+                             legendgroup='group1',
+                             mode='lines', line=dict(color=colors[0])), row=1, col=1)
+    
+    fig.add_trace(go.Scatter(x=val[date:].index,
+                             y=y2,
+                             name="Time Weighted Return",
+                             legendgroup='group1',
+                             line=dict(color=colors[3])), row=1, col=1)
+    
+    fig.add_trace(go.Scatter(x=index_price[date:].index,
+                             y=y3,
+                             name="Benchmark Index",
+                             legendgroup='group1',
+                             line=dict(color=colors[5])), row=1, col=1)
 
+    # Set layout for portfolio gain subplot
+    fig.update_yaxes(title_text="Gain (%)", row=1, col=1)
+    fig.update_xaxes(title_text="Date", row=1, col=1)
+
+    # Plot total portfolio value
+    fig.add_trace(go.Scatter(x=val.index,
+                             y=val.sum(axis=1) / 1000,  
+                             name="Total Portfolio Value",
+                             legendgroup='group2',
+                             showlegend=False,
+                             line=dict(color='rgb(71, 157, 201)')), 
+                             row=1, col=2)
+
+    # Set layout for total portfolio value subplot
+    fig.update_yaxes(title_text="Value (*$1000s)", row=1, col=2)
+    fig.update_xaxes(title_text="Date", row=1, col=2)
+    
+    fig.update_layout(showlegend=True,
+                      autosize=False,
+                      width=1400,
+                      height=550,
+                      xaxis=dict(showgrid=True),
+                      yaxis=dict(showgrid=True))
+    
+    fig['layout']['xaxis2'].update(showgrid=True)
+    fig.update_annotations(font_size=20)
+    
+    # Add buttons to toggle calculation method
+    fig.update_layout(
+        updatemenus=[
+            dict(
+                type="buttons",
+                direction="right",
+                buttons=list([
+                    dict(
+                        args=[{"y": [calculate_returns('basic')[0], calculate_returns('basic')[1], 
+                                     calculate_returns('basic')[2], val.sum(axis=1) / 1000]}],
+                        label="Basic",
+                        method="update"
+                    ),
+                    dict(
+                        args=[{"y": [calculate_returns('total')[0], calculate_returns('total')[1], 
+                                     calculate_returns('total')[2], val.sum(axis=1) / 1000]}],
+                        label="Total",
+                        method="update"
+                    )
+                ]),
+                pad={"r": 10, "t": 10},
+                showactive=True,
+                x=0.1,
+                xanchor="left",
+                y=1.1,
+                yanchor="top"
+            ),
+        ]
+    )
+    
+    return fig
 
 def plot_portfolio_gain_plotly_(val, cash_flows, index_price, date=None):
     
