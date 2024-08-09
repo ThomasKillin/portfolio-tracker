@@ -88,9 +88,15 @@ def display_data():
         # Extract variables for performance calculations
         val, cash_flows, price, accum, shares, div, div_ = share.extract_parameters(st.session_state['portfolio'])
     
-        summary = share.stock_summary(st.session_state['portfolio'], index, 
+        summary_basic = share.stock_summary(st.session_state['portfolio'], index, 
                                       date=st.session_state['start_date'],
                                       calc_method='basic')   
+        
+        summary_total = share.stock_summary(st.session_state['portfolio'], index, 
+                                      date=st.session_state['start_date'],
+                                      calc_method='total')   
+        
+        
         
         #if 'calc_option' not in st.session_state:
         #    st.session_state['calc_option'] = "Basic return"
@@ -119,32 +125,40 @@ def display_data():
                                                 index_div=div_[index],
                                                 date=st.session_state['start_date'],
                                                 calc_method='basic')
-        fig2 = graph.plot_stock_gain_plotly(val, cash_flows,
+        fig2 = graph.plot_portfolio_gain_plotly(val, cash_flows, price[index],
+                                                div=div,
+                                                index_div=div_[index],
+                                                date=st.session_state['start_date'],
+                                                calc_method='total')
+        fig3 = graph.plot_stock_gain_plotly(val, cash_flows,
                                             date=st.session_state['start_date'])
-        fig3 = graph.plot_stock_holdings_plotly(val, 
+        fig4 = graph.plot_stock_holdings_plotly(val, 
                                                 date=st.session_state['start_date'])
-        fig4 = graph.plot_annualised_return_plotly_(val, cash_flows, price[index], 
+        fig5 = graph.plot_annualised_return_plotly_(val, cash_flows, price[index], 
                                                     date=st.session_state['start_date'])
         
           
         
-        tab1, tab2, tab3 = st.tabs(['Portfolio Gain', "Stock Gain", "Stock details"])    
+        tab1, tab2, tab3, tab4 = st.tabs(['Portfolio Gain', 'Total Portfolio Gain', "Stock Gain", "Stock details"])    
         
         with tab1:
             st.plotly_chart(fig1)
-            col1, col2, _ = st.columns([0.6, 3, 0.6])               
-        
+            #col1, col2, _ = st.columns([0.6, 3, 0.6])    
+            st.dataframe(summary_basic, use_container_width=True)  
+            
         with tab2:
-            st.plotly_chart(fig2)
+            st.plotly_chart(fig2)    
+            st.dataframe(summary_total, use_container_width=True)         
         
         with tab3:
+            st.plotly_chart(fig3)
+        
+        with tab4:
             col1, col2 = st.columns([1, 1])
             with col1:
-                st.plotly_chart(fig3)    
+                st.plotly_chart(fig4)    
             with col2:    
-                st.plotly_chart(fig4)
-        
-        st.dataframe(summary, use_container_width=True)
+                st.plotly_chart(fig5)
         
         display_calc_details()
             

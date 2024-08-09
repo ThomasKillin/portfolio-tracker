@@ -270,7 +270,7 @@ def basic_total_return_annualised(val, cash_flows, div, date=None, use_initial_C
                           if not (val == 0).all() 
                           else pd.Series(1, index=val.index))
     
-    basic_tot_ret_ann = np.power(basic_return(val, cash_flows, div, use_initial_CF=use_initial_CF) + 1, 
+    basic_tot_ret_ann = np.power(basic_total_return(val, cash_flows, div, use_initial_CF=use_initial_CF) + 1, 
                              1 / num_years) - 1
     
     return basic_tot_ret_ann    
@@ -573,5 +573,63 @@ def time_weighted_return_annualised(val, cash_flows, date=None, use_initial_CF=F
                               else pd.Series(1, index=x.index)) 
        
     MDR_ann = np.power(time_weighted_return(val, cash_flows) + 1, 1 / num_years) - 1
+        
+    return MDR_ann
+
+
+def time_weighted_total_return_annualised(val, cash_flows, div, date=None, use_initial_CF=False):
+    '''
+    Annualized Return = (1 + time_weighted_return())**(years held) - 1
+    
+    https://www.investopedia.com/terms/a/annualized-total-return.asp
+    
+    Parameters
+    ----------
+    val : pandas.DataFrame or pandas.Series
+        Cumulative dollar value of each stock holdings. Data should be time series indexed.
+        Each column is assummed to be a different stock in the portfolio.
+    cash_flows : pandas.DataFrame or pandas.Series
+        Dollar value of cash flows into or out of the portfolio. Data should be time series indexed.
+        Each column is assummed to be a different stock in the portfolio
+    date : string, optional
+        Optional date string to pass to the Datetime index set the start date for the portfolio. 
+        Full or partial string can be provided eg '20210415' or '2018'. The default is None.
+    use_initial_CF : bool, optional
+        Use the first row of cash_flow as the initial portfolio value instead of the first row
+        of val. If the first date in the dataframe represents the first purchase date of the 
+        portfolio then use_initial_CF should be set to True to give the correct cost base. 
+        The default is False.
+
+    Returns
+    -------
+    MDR_ann : pandas.DataFrame or pandas.Series
+        Annualised time weighted (Modified-Dietz) return (%) calculated for each stock and for 
+        each date in the time series index.
+    '''
+    # MDR on a per stock basis. 
+    # start from first non-zero accumulation    
+    
+    # Truncate based on date argument
+    val = val.loc[date:]
+    cash_flows = cash_flows.loc[date:]
+    div = div.loc[date:]
+    
+    # Convert Pandas Series to dataframe for num_years calculation
+    if not isinstance(val, pd.DataFrame):
+        val = pd.DataFrame(val)
+    if not isinstance(cash_flows, pd.DataFrame):
+        cash_flows = pd.DataFrame(cash_flows)
+    if not isinstance(div, pd.DataFrame):
+        div = pd.DataFrame(div)        
+    
+    # Find the first non-zero row of each col - which becomes the start date for calculating the
+    # num_years. Set num_years to 1 if (val==0).all() to avoid divide by zero error
+    # Assume 261 business days in a calender year
+    num_years = val.apply(lambda x: (pd.Series(x.loc[x.ne(0).idxmax():].reset_index().index.values, 
+                                                   index=x.loc[x.ne(0).idxmax():].index) / 261) 
+                              if not (x == 0).all() 
+                              else pd.Series(1, index=x.index)) 
+       
+    MDR_ann = np.power(time_weighted_total_return(val, cash_flows, div) + 1, 1 / num_years) - 1
         
     return MDR_ann

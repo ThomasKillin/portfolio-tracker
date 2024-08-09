@@ -135,7 +135,7 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, date=None
     return fig
 """
 
-def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div=None, date=None, calc_method='basic'):
+def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div=None, date=None, calc_method='basic', add_toggle=False):
     
     init_CF = (val.shape == val[date:].shape)
     
@@ -205,35 +205,36 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
     fig['layout']['xaxis2'].update(showgrid=True)
     fig.update_annotations(font_size=20)
     
-    # Add buttons to toggle calculation method
-    fig.update_layout(
-        updatemenus=[
-            dict(
-                type="buttons",
-                direction="right",
-                buttons=list([
-                    dict(
-                        args=[{"y": [calculate_returns('basic')[0], calculate_returns('basic')[1], 
-                                     calculate_returns('basic')[2], val.sum(axis=1) / 1000]}],
-                        label="Basic",
-                        method="update"
-                    ),
-                    dict(
-                        args=[{"y": [calculate_returns('total')[0], calculate_returns('total')[1], 
-                                     calculate_returns('total')[2], val.sum(axis=1) / 1000]}],
-                        label="Total",
-                        method="update"
-                    )
-                ]),
-                pad={"r": 10, "t": 10},
-                showactive=True,
-                x=0.1,
-                xanchor="left",
-                y=1.1,
-                yanchor="top"
-            ),
-        ]
-    )
+    if add_toggle:
+        # Add buttons to toggle calculation method
+        fig.update_layout(
+            updatemenus=[
+                dict(
+                    type="buttons",
+                    direction="right",
+                    buttons=list([
+                        dict(
+                            args=[{"y": [calculate_returns('basic')[0], calculate_returns('basic')[1], 
+                                         calculate_returns('basic')[2], val.sum(axis=1) / 1000]}],
+                            label="<b>Basic</b>",
+                            method="update"
+                        ),
+                        dict(
+                            args=[{"y": [calculate_returns('total')[0], calculate_returns('total')[1], 
+                                         calculate_returns('total')[2], val.sum(axis=1) / 1000]}],
+                            label="<b>Total</b>",
+                            method="update"
+                        )
+                    ]),
+                    pad={"r": 10, "t": 10},
+                    showactive=True,
+                    x=0.5,
+                    xanchor="center",
+                    y=1.2,
+                    yanchor="top"
+                ),
+            ]
+        )
     
     return fig
 
