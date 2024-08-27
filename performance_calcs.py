@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import numpy_financial as npf
 
 
 def average_price(cash_flows, shares, date=None):
@@ -320,7 +321,7 @@ def daily_portfolio_pct_gain(val, price):
     
     return gain   
 
-    
+
 def time_weighted_return(val, cash_flows, date=None, use_initial_CF=False):
     '''
     Calculates the time-weighted return based on the Modified-Dietz formula.
@@ -633,3 +634,167 @@ def time_weighted_total_return_annualised(val, cash_flows, div, date=None, use_i
     MDR_ann = np.power(time_weighted_total_return(val, cash_flows, div) + 1, 1 / num_years) - 1
         
     return MDR_ann
+
+
+def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, resample_freq='auto'):
+    '''
+    Calculates the time-weighted return based on the Modified-Dietz formula.
+    time weighted return = (V1 - V0 - CF) / (V0 + CF(t)) 
+    where, 
+    V0 = starting value 
+    V1 = ending value
+    CF = sum of cash flows into and out of the portfolio
+    CF(t) are cash flows weighted for time in the portfolio
+    
+    https://www.kitces.com/blog/twr-dwr-irr-calculations-performance-reporting-software-methodology-gips-compliance/
+    
+    Parameters
+    ----------
+    val : pandas.DataFrame or pandas.Series
+        Cumulative dollar value of each stock holdings. Data should be time series indexed.
+        Each column is assumed to be a different stock in the portfolio.
+    cash_flows : pandas.DataFrame or pandas.Series
+        Dollar value of cash flows into or out of the portfolio. Data should be time series indexed.
+        Each column is assumed to be a different stock in the portfolio.
+    date : string, optional
+        Optional date string to pass to the Datetime index set the start date for the portfolio. 
+        Full or partial string can be provided eg '20210415' or '2018'. The default is None.
+    use_initial_CF : bool, optional
+        Use the first row of cash_flow as the initial portfolio value instead of the first row
+        of val. If the first date in the dataframe represents the first purchase date of the 
+        portfolio then use_initial_CF should be set to True to give the correct cost base. 
+        The default is False.
+    resample_freq : str, optional
+        Frequency for resampling the data. Options are 'auto', 'W' (weekly), 'M' (monthly), 'Q' (quarterly).
+        If 'auto', the function will automatically choose a frequency to keep the number of rows < 150.
+        The default is 'auto'.
+
+    Returns
+    -------
+    DWR : pandas.DataFrame
+        Dollar-weighted return (%) calculated for each stock and for each date in the resampled time series,
+        representing the total return since the start date.
+    '''
+    # MDR on a per stock basis.
+    # start from first non-zero accumulation
+
+    # Truncate based on date argument
+    val = val.loc[date:]
+    cash_flows = cash_flows.loc[date:]    
+
+    # Convert Pandas Series to dataframe
+    if not isinstance(val, pd.DataFrame):
+        val = pd.DataFrame(val)
+    if not isinstance(cash_flows, pd.DataFrame):
+        cash_flows = pd.DataFrame(cash_flows)
+
+    #TODO: BUsiness quarters / months / weekday
+    # Determine resampling frequency
+    if resample_freq == 'auto':
+        num_rows = len(val)
+        if num_rows <= 150:
+            resample_freq = 'B'  # Daily, no resampling needed
+        elif num_rows <= 150 * 7:
+            resample_freq = 'W'  # Weekly
+        elif num_rows <= 150 * 30:
+            resample_freq = 'M'  # Monthly
+        else:
+            resample_freq = 'Q'  # Quarterly
+    elif resample_freq not in ['W', 'M', 'Q']:
+        raise ValueError("resample_freq must be 'auto', 'W', 'M', or 'Q'")
+
+    DWR = pd.DataFrame([])
+    for column in val:
+        vcol = val[column]
+        ccol = cash_flows[column]
+
+        if (vcol == 0).all():
+            DWR_individual = pd.Series(0, index=vcol.index, name=vcol.name)
+        else:
+            # Initial value of stock holding
+            initial_val = vcol.iloc[0]
+
+            # Start from first non-zero row
+            start_index = vcol[vcol!=0].index[0]
+            vcol = vcol.loc[start_index:]        
+            ccol = ccol.loc[start_index:]    
+
+            irr_series = -ccol    
+
+            # Only use the val column for initial val/cost base if use_initial_CF == False
+            # and the first row is non-zero (i.e. there are no holdings at the start date)
+            # Otherwise the first cash flow can be used as the initial portfolio val (V0)
+            # This matches the methodology used for Basic Return calc.
+            if not use_initial_CF or not initial_val:
+                irr_series.iloc[0] = -vcol.iloc[0]
+
+            # Resample data
+            irr_series = irr_series.resample(resample_freq).sum()
+            vcol_ = vcol.resample(resample_freq).last()
+            
+            """
+            # Calculate IRR for each period, representing total return since start
+            DWR_individual = pd.Series((
+                (
+                    pd.DataFrame(irr_series)
+                    .reset_index()
+                    .apply(
+                        #lambda x: (np.power(1 + npf.irr(np.concatenate([
+                        #    np.array(irr_series.iloc[0:x.name + 1]),
+                        #    [vcol_.iloc[x.name]]   # TODO: Need to use non-resampled here?
+                        #])), (x.name + 1) / len(irr_series)) - 1) * 100,
+                        #axis=1,
+                        lambda x: npf.irr(np.concatenate([
+                            np.array(irr_series.iloc[: x.name + 1]),
+                            [vcol_.iloc[x.name]]
+                        ])) * 100,
+                        axis=1,
+                    )
+                )
+                .fillna(0)
+                .replace(-1, np.nan)
+                .ffill()
+            ), name=column).set_axis(irr_series.index)
+        """
+            # Resample data
+            irr_series = irr_series.resample(resample_freq).sum()
+            vcol_ = vcol.resample(resample_freq).last()
+
+            # Calculate IRR for each period
+            periods = pd.DataFrame(irr_series).reset_index()
+            periods['irr'] = periods.apply(
+                lambda x: npf.irr(np.concatenate([
+                    np.array(irr_series.iloc[0:x.name + 1]),
+                    [vcol_.iloc[x.name]]
+                ])),
+                axis=1
+            )
+            
+        # Calculate total periods and convert to total return
+        total_periods = len(periods)
+        periods['total_return'] = (1 + periods['irr']) ** (periods.index + 1) - 1
+        
+        DWR_individual = pd.Series(periods['total_return'] * 100, index=periods['Date'], name=column)
+        
+        DWR = pd.merge(DWR, DWR_individual, how='outer', left_index=True, right_index=True)
+
+    """
+            # Convert to pd.DataFrame to allow name method to be used
+            DWR_individual = pd.Series((
+                (
+                    pd.DataFrame(irr_series)
+                    .reset_index()
+                    .apply(
+                        #lambda x: npf.irr(np.append(np.array(irr_series.iloc[: x.name + 1])[:-1], vcol_.iloc[x.name]))
+                        lambda x: npf.irr(np.add(np.array(irr_series.iloc[: x.name + 1]), 
+                                          np.append(np.zeros(len(irr_series)-1), vcol.iloc[-1])))
+                        * 100,
+                        axis=1,
+                    )
+                )
+                .fillna(0)
+                .replace(-1, np.nan)
+                .ffill()
+            ), name=column).set_axis(irr_series.index)
+        """
+    return DWR

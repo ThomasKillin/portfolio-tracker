@@ -154,10 +154,16 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
     
     y1, y2, y3 = calculate_returns(calc_method)
     
+    if calc_method == 'basic':
+        plot_titles = ("<b>Portfolio Gain", "<b>Total Portfolio Value")
+        portfolio_val = val.sum(axis=1) / 1000
+    else:
+        plot_titles = ("<b>Total Shareholder Return", "<b>Total Portfolio Value")
+        portfolio_val = (val.sum(axis=1) + div.cumsum().sum(axis=1)) / 1000
     # Create subplot for portfolio gain vs. time
     fig = make_subplots(rows=1, cols=2, 
                         column_widths=[1, 1],
-                        subplot_titles=("<b>Portfolio Gain", "<b>Total Portfolio Value"))
+                        subplot_titles=plot_titles)
     
     # Plot portfolio gain
     fig.add_trace(go.Scatter(x=val[date:].index,
@@ -184,7 +190,7 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
 
     # Plot total portfolio value
     fig.add_trace(go.Scatter(x=val.index,
-                             y=val.sum(axis=1) / 1000,  
+                             y=portfolio_val,  
                              name="Total Portfolio Value",
                              legendgroup='group2',
                              showlegend=False,
