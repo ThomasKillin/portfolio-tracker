@@ -38,18 +38,21 @@ def process_data(merged_portfolio):
 def display_calc_details():
     with st.expander(":question: Calculation  \ndetails", expanded=False):
         st.markdown('Some of the following metrics are used to characterise the portfolio:')
-        st.markdown('https://www.kitces.com/blog/twr-dwr-irr-calculations-performance-reporting-software-methodology-gips-compliance/')
-        st.markdown('1. **Basic return**')
+        st.markdown('1. **Price Return**')
+        st.markdown('Price return is the % return based on share price appreciation only')
+        st.markdown('1. **Total Return**')
+        st.markdown('Total return includes share price appreciation plus dividend income')
+        st.markdown('3. **Basic return**')
         st.markdown('The basic rate of return takes the gain for the portfolio and divides by the (original) investment amount')
         st.markdown('Cash flows are taken into account by assuming they occurred at the beginning of the investment period')
-        st.markdown('2. **Time-weighted-return**')
+        st.markdown('4. **Time-weighted-return**')
         st.markdown('A time-weighted return attempts to minimize or altogether remove the effects of interim cash flows.')
         st.markdown('Cash flows are weighted according to the amount of time they have been part of the portfolio')
-        st.markdown('3. **Annualised returns**')
+        st.markdown('5. **Annualised returns**')
         st.markdown('An annualized total return is the geometric average amount of money earned by an investment each')
         st.markdown('year over a given time period. The annualized return formula is calculated as a geometric average')
         st.markdown('to show what an investor would earn over a period of time if the annual return was compounded.')
-
+        st.markdown('\nhttps://www.kitces.com/blog/twr-dwr-irr-calculations-performance-reporting-software-methodology-gips-compliance/')
 
 def display_readme():
     st.image(os.path.join('screenshots','banner.png'))
@@ -137,23 +140,24 @@ def display_data():
         fig5 = graph.plot_annualised_return_plotly_(val, cash_flows, price[index], 
                                                     date=st.session_state['start_date'])
         
-          
-        
-        tab1, tab2, tab3, tab4 = st.tabs(['Portfolio Gain', 'Total Portfolio Gain', "Stock Gain", "Stock details"])    
+        tab1, tab2, tab3 = st.tabs(['Portfolio Returns', 'Stock Returns', 'Stock details'])    
         
         with tab1:
-            st.plotly_chart(fig1)
-            #col1, col2, _ = st.columns([0.6, 3, 0.6])    
-            st.dataframe(summary_basic, use_container_width=True)  
-            
-        with tab2:
-            st.plotly_chart(fig2)    
-            st.dataframe(summary_total, use_container_width=True)         
+            tab_a, tab_b = st.tabs(['Price Return', 'Total Return'])
+            with tab_a:
+                
+                st.plotly_chart(fig1)
+                #col1, col2, _ = st.columns([0.6, 3, 0.6])    
+                st.dataframe(summary_basic, use_container_width=True)  
+            with tab_b:
+                
+                st.plotly_chart(fig2)    
+                st.dataframe(summary_total, use_container_width=True) 
         
-        with tab3:
+        with tab2:
             st.plotly_chart(fig3)
         
-        with tab4:
+        with tab3:
             col1, col2 = st.columns([1, 1])
             with col1:
                 st.plotly_chart(fig4)    

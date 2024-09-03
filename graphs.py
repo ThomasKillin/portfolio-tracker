@@ -146,19 +146,21 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
             y1 = calc.basic_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
             y2 = (calc.time_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100)[0]
             y3 = calc.basic_return(index_price, pd.Series(0, index=index_price.index), date=date) * 100
+            y4 = calc.dollar_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
         elif calc_method == 'total':
             y1 = calc.basic_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
             y2 = (calc.time_weighted_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100)[0]
-            y3 = calc.basic_total_return(index_price, pd.Series(0, index=index_price.index), index_div, date=date) * 100
-        return y1.values.tolist(), y2.values.tolist(), y3.values.tolist()
+            y3 = calc.basic_total_return(index_price, pd.Series(0, index=index_price.index), index_div, date=date) * 100                    
+            y4 = calc.dollar_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
+        return y1, y2, y3, y4
     
-    y1, y2, y3 = calculate_returns(calc_method)
+    y1, y2, y3, y4 = calculate_returns(calc_method)
     
     if calc_method == 'basic':
-        plot_titles = ("<b>Portfolio Gain", "<b>Total Portfolio Value")
+        plot_titles = ("<b>Price return", "<b>Total Portfolio Value")
         portfolio_val = val.sum(axis=1) / 1000
     else:
-        plot_titles = ("<b>Total Shareholder Return", "<b>Total Portfolio Value")
+        plot_titles = ("<b>Total Shareholder Return", "<b>Total Portfolio Value + accumulated dividends ")
         portfolio_val = (val.sum(axis=1) + div.cumsum().sum(axis=1)) / 1000
     # Create subplot for portfolio gain vs. time
     fig = make_subplots(rows=1, cols=2, 
@@ -167,22 +169,28 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
     
     # Plot portfolio gain
     fig.add_trace(go.Scatter(x=val[date:].index,
-                             y=y1,
+                             y=y1.values.tolist(),
                              name="Basic Return",
                              legendgroup='group1',
                              mode='lines', line=dict(color=colors[0])), row=1, col=1)
     
     fig.add_trace(go.Scatter(x=val[date:].index,
-                             y=y2,
+                             y=y2.values.tolist(),
                              name="Time Weighted Return",
-                             legendgroup='group1',
+                             legendgroup='group2',
                              line=dict(color=colors[3])), row=1, col=1)
     
     fig.add_trace(go.Scatter(x=index_price[date:].index,
-                             y=y3,
+                             y=y3.values.tolist(),
                              name="Benchmark Index",
-                             legendgroup='group1',
+                             legendgroup='group3',
                              line=dict(color=colors[5])), row=1, col=1)
+    
+    fig.add_trace(go.Scatter(x=y4.index,
+                             y=y4.values.flatten(),
+                             name="Dollar weighted return",
+                             legendgroup='group4',
+                             line=dict(color='darkgrey')), row=1, col=1)
 
     # Set layout for portfolio gain subplot
     fig.update_yaxes(title_text="Gain (%)", row=1, col=1)

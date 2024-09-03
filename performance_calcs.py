@@ -2,6 +2,32 @@ import numpy as np
 import pandas as pd
 import numpy_financial as npf
 
+def prepare_data(*args, date=None):
+        """
+        Helper function
+        Truncate data based on date argument and convert Series to DataFrame.
+        
+        Parameters:
+        *args: Variable number of pandas Series or DataFrames
+        date: Optional date string to truncate the data
+        
+        Returns:
+        List of prepared DataFrames
+        """
+        prepared_data = []
+        for arg in args:
+            # Truncate based on date argument
+            if date is not None:
+                arg = arg.loc[date:]
+            
+            # Convert Pandas Series to DataFrame
+            if not isinstance(arg, pd.DataFrame):
+                arg = pd.DataFrame(arg)
+            
+            prepared_data.append(arg)
+        
+        return prepared_data
+    
 
 def average_price(cash_flows, shares, date=None):
     '''
@@ -360,15 +386,8 @@ def time_weighted_return(val, cash_flows, date=None, use_initial_CF=False):
     # MDR on a per stock basis. 
     # start from first non-zero accumulation    
     
-    # Truncate based on date argument
-    val = val.loc[date:]
-    cash_flows = cash_flows.loc[date:]    
-    
-    # Convert Pandas Series to dataframe
-    if not isinstance(val, pd.DataFrame):
-        val = pd.DataFrame(val)
-    if not isinstance(cash_flows, pd.DataFrame):
-        cash_flows = pd.DataFrame(cash_flows)
+    # Prepare the data
+    val, cash_flows = prepare_data(val, cash_flows, date=date)
     
     MDR = pd.DataFrame([])
     for column in val:
@@ -458,18 +477,8 @@ def time_weighted_total_return(val, cash_flows, div, date=None, use_initial_CF=F
     # MDR on a per stock basis. 
     # start from first non-zero accumulation    
     
-    # Truncate based on date argument
-    val = val.loc[date:]
-    cash_flows = cash_flows.loc[date:] 
-    div = div.loc[date:]   
-    
-    # Convert Pandas Series to dataframe
-    if not isinstance(val, pd.DataFrame):
-        val = pd.DataFrame(val)
-    if not isinstance(cash_flows, pd.DataFrame):
-        cash_flows = pd.DataFrame(cash_flows)
-    if not isinstance(div, pd.DataFrame):
-        div = pd.DataFrame(div)
+    # Prepare the data
+    val, cash_flows, div = prepare_data(val, cash_flows, div, date=date)
     
     MDR = pd.DataFrame([])
     for column in val:
@@ -555,15 +564,8 @@ def time_weighted_return_annualised(val, cash_flows, date=None, use_initial_CF=F
     # MDR on a per stock basis. 
     # start from first non-zero accumulation    
     
-    # Truncate based on date argument
-    val = val.loc[date:]
-    cash_flows = cash_flows.loc[date:]
-    
-    # Convert Pandas Series to dataframe for num_years calculation
-    if not isinstance(val, pd.DataFrame):
-        val = pd.DataFrame(val)
-    if not isinstance(cash_flows, pd.DataFrame):
-        cash_flows = pd.DataFrame(cash_flows)        
+    # Prepare the data
+    val, cash_flows = prepare_data(val, cash_flows, date=date)      
     
     # Find the first non-zero row of each col - which becomes the start date for calculating the
     # num_years. Set num_years to 1 if (val==0).all() to avoid divide by zero error
@@ -609,19 +611,9 @@ def time_weighted_total_return_annualised(val, cash_flows, div, date=None, use_i
     '''
     # MDR on a per stock basis. 
     # start from first non-zero accumulation    
-    
-    # Truncate based on date argument
-    val = val.loc[date:]
-    cash_flows = cash_flows.loc[date:]
-    div = div.loc[date:]
-    
-    # Convert Pandas Series to dataframe for num_years calculation
-    if not isinstance(val, pd.DataFrame):
-        val = pd.DataFrame(val)
-    if not isinstance(cash_flows, pd.DataFrame):
-        cash_flows = pd.DataFrame(cash_flows)
-    if not isinstance(div, pd.DataFrame):
-        div = pd.DataFrame(div)        
+
+    # Prepare the data
+    val, cash_flows, div = prepare_data(val, cash_flows, div, date=date)
     
     # Find the first non-zero row of each col - which becomes the start date for calculating the
     # num_years. Set num_years to 1 if (val==0).all() to avoid divide by zero error
@@ -678,31 +670,31 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
     # MDR on a per stock basis.
     # start from first non-zero accumulation
 
-    # Truncate based on date argument
-    val = val.loc[date:]
-    cash_flows = cash_flows.loc[date:]    
-
-    # Convert Pandas Series to dataframe
-    if not isinstance(val, pd.DataFrame):
-        val = pd.DataFrame(val)
-    if not isinstance(cash_flows, pd.DataFrame):
-        cash_flows = pd.DataFrame(cash_flows)
+    # Prepare the data
+    val, cash_flows = prepare_data(val, cash_flows, date=date)
 
     #TODO: BUsiness quarters / months / weekday
     # Determine resampling frequency
     if resample_freq == 'auto':
         num_rows = len(val)
-        if num_rows <= 150:
-            resample_freq = 'B'  # Daily, no resampling needed
-        elif num_rows <= 150 * 7:
-            resample_freq = 'W'  # Weekly
-        elif num_rows <= 150 * 30:
-            resample_freq = 'M'  # Monthly
+        if num_rows <= 200:
+            resample_freq = 'B'  # Business Daily, no resampling needed
+        elif num_rows <= 200 * 7:
+            resample_freq = 'W-FRI'  # Business Weekly
+        elif num_rows <= 200 * 30:
+            resample_freq = 'BM'  # Business Monthly
         else:
-            resample_freq = 'Q'  # Quarterly
+            resample_freq = 'BQ'  # Business Quarterly
     elif resample_freq not in ['W', 'M', 'Q']:
-        raise ValueError("resample_freq must be 'auto', 'W', 'M', or 'Q'")
-
+        raise ValueError("resample_freq must be 'auto', 'W', 'M', or 'Q'")  
+    # convert to business days, etc
+    elif resample_freq == 'W':
+        resample_freq = 'BW'
+    elif resample_freq == 'M':
+        resample_freq = 'BM'
+    elif resample_freq == 'Q':
+        resample_freq = 'BQ'
+    
     DWR = pd.DataFrame([])
     for column in val:
         vcol = val[column]
@@ -771,10 +763,9 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
             )
             
         # Calculate total periods and convert to total return
-        total_periods = len(periods)
         periods['total_return'] = (1 + periods['irr']) ** (periods.index + 1) - 1
         
-        DWR_individual = pd.Series(periods['total_return'] * 100, index=periods['Date'], name=column)
+        DWR_individual = pd.Series(periods['total_return'].values, index=periods['Date'], name=column).fillna(0)
         
         DWR = pd.merge(DWR, DWR_individual, how='outer', left_index=True, right_index=True)
 
