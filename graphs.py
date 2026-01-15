@@ -151,7 +151,7 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
             y1 = calc.basic_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
             y2 = (calc.time_weighted_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100)[0]
             y3 = calc.basic_total_return(index_price, pd.Series(0, index=index_price.index), index_div, date=date) * 100                    
-            y4 = calc.dollar_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
+            y4 = calc.dollar_weighted_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
         return y1, y2, y3, y4
     
     y1, y2, y3, y4 = calculate_returns(calc_method)
