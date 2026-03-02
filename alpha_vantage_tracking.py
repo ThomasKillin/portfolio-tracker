@@ -2,7 +2,11 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import os
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv():
+        return None
 import requests
 from typing import Dict, Any
 
@@ -100,6 +104,8 @@ def merge_pricedata(portfolio, index):
     
     # Fetch stock prices using API and merge with trading data
     print("\nAPI call in progress...\n")
+    fetched_tickers = []
+    failed_tickers = {}
 
     # Extract list of portfolio tickers
     tickers = list(portfolio.columns.levels[1]) + [index]
@@ -142,16 +148,28 @@ def merge_pricedata(portfolio, index):
                 ).drop_duplicates()
                 
                 print(f"Successfully fetched data for {i}")
+                fetched_tickers.append(i)
             else:
                 print(f"Error: No data available for stock ticker {i}. Skipping...")
+                failed_tickers[i] = "no time series data available"
                 
         except Exception as e:
             print(f"Error processing data for {i}: {str(e)}")
+            failed_tickers[i] = f"{type(e).__name__}: {e}"
             continue
 
     print("API call complete\n")
+    if failed_tickers:
+        print("Warning: some tickers failed to fetch:")
+        for ticker, reason in failed_tickers.items():
+            print(f"  - {ticker}: {reason}")
 
     # Set to 'Business day' datetime frequency
     portfolio = portfolio.sort_index().asfreq(freq="B")
+    portfolio.attrs["price_fetch"] = {
+        "provider": "alpha_vantage",
+        "fetched": fetched_tickers,
+        "failed": failed_tickers,
+    }
 
     return portfolio 

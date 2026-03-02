@@ -1,5 +1,9 @@
 import os
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv():
+        return None
 import share_tracking as share
 import alpha_vantage_tracking as av
 import finnhub_tracking as fh
@@ -15,7 +19,13 @@ def get_data_provider():
     Get the current data provider from environment variable.
     Returns 'yfinance' if not set.
     """
-    return os.getenv('DATA_PROVIDER', DEFAULT_PROVIDER)
+    provider = os.getenv('DATA_PROVIDER', DEFAULT_PROVIDER)
+    if not provider:
+        return DEFAULT_PROVIDER
+    provider = provider.strip().lower()
+    if provider not in ['yfinance', 'alpha_vantage', 'finnhub']:
+        return DEFAULT_PROVIDER
+    return provider
 
 def set_data_provider(provider: str):
     """

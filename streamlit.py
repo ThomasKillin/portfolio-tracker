@@ -34,8 +34,24 @@ def get_data(file, index):
         with st.spinner('Collecting share price data'):
             user_portfolio = share.get_userdata(file)
             merged_portfolio = dp.merge_pricedata(user_portfolio, index)
-                                                     
-        st.success('Success')
+        fetch_meta = merged_portfolio.attrs.get("price_fetch", {})
+        fetched = fetch_meta.get("fetched", [])
+        failed = fetch_meta.get("failed", {})
+        params = set(merged_portfolio.columns.get_level_values("Params"))
+        provider = fetch_meta.get("provider", dp.get_data_provider())
+
+        if "$" not in params:
+            st.warning(
+                f"No market price data was returned by provider '{provider}'. "
+                "Portfolio transactions were loaded, but price-based metrics cannot be calculated."
+            )
+        elif failed:
+            st.warning(
+                f"Price data loaded with partial failures. "
+                f"Fetched: {len(fetched)} ticker(s), Failed: {len(failed)} ticker(s)."
+            )
+        else:
+            st.success('Success')
     
     return merged_portfolio
             
@@ -43,9 +59,15 @@ def get_data(file, index):
 def process_data(merged_portfolio, target_currency):
     
     # Perform initial processing of portfolio data
-    portfolio = share.process_data(merged_portfolio)
-    portfolio = share.convert_currency(portfolio, target_currency=target_currency)
+    try:
+        portfolio = share.process_data(merged_portfolio)
+        portfolio = share.convert_currency(portfolio, target_currency=target_currency)
+    except ValueError as exc:
+        st.error(str(exc))
+        return False
+
     st.session_state['portfolio'] = portfolio
+    return True
 
 
 def display_calc_details():
@@ -94,9 +116,14 @@ def display_data():
         
         #st.session_state['display'] = True
         with st.sidebar:
+            max_date = (
+                st.session_state['portfolio'].index[-2]
+                if len(st.session_state['portfolio'].index) > 1
+                else st.session_state['portfolio'].index[-1]
+            )
             start_date = st.date_input(':date: Select start date', 
                                         min_value = st.session_state['portfolio'].index[0],
-                                        max_value = st.session_state['portfolio'].index[-2],
+                                        max_value = max_date,
                                         value = st.session_state['portfolio'].index[0],
                                         on_change=display_data)
             st.session_state['start_date'] = start_date
@@ -185,12 +212,12 @@ def display_data():
 
 
 
-def get_and_display_data():
+def get_and_display_data(file, index, target_currency):
     
     if 'portfolio' in st.session_state:     
-        merged_portfolio = get_data()
-        process_data(merged_portfolio)
-        display_data()
+        merged_portfolio = get_data(file=file, index=index)
+        if process_data(merged_portfolio, target_currency=target_currency):
+            display_data()
 
 
 # Get index and csv file
@@ -245,7 +272,7 @@ with st.sidebar:
             file = csv_files[-1]
             st.success('Default portfolio located:  \n{:s}   \nClick \'Browse Files\' to load another'.format(os.path.split(file)[1]))
             button = st.button('Get share price data', type="primary")
-        except:
+        except (FileNotFoundError, OSError, IndexError):
             if os.path.exists('sample_portfolio.csv'):   
                 file = 'sample_portfolio.csv'
                 st.success('Sample portfolio loaded  \nClick \'Browse Files\' to load another')
@@ -258,12 +285,10 @@ with st.sidebar:
 # If button then extract the data
 if button:
     merged_portfolio = get_data(file=file, index=index)
-    process_data(merged_portfolio=merged_portfolio, target_currency=base_currency)
-    display_data()
+    if process_data(merged_portfolio=merged_portfolio, target_currency=base_currency):
+        display_data()
         
 # Show a readme if portfolio not extracted
 if 'portfolio' not in st.session_state: 
     
     display_readme()
-
-
