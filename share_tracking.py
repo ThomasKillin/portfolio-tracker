@@ -437,8 +437,13 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
     # Get the price, filtered by date only, for use in daily return calc
     price_all = price[date:]
     # Filter by date and forward fill
-    for i in [val, cash_flows, price, accum, shares, div_tot, div]:
-        i[:] = i[date:].ffill()
+    val = val.loc[date:].ffill()
+    cash_flows = cash_flows.loc[date:].ffill()
+    price = price.loc[date:].ffill()
+    accum = accum.loc[date:].ffill()
+    shares = shares.loc[date:].ffill()
+    div_tot = div_tot.loc[date:].ffill()
+    div = div.loc[date:].ffill()
 
     # init_CF = (True if date == None else False)
 
@@ -455,8 +460,13 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
     if currency:
         portfolio = convert_currency(portfolio, target_currency=currency)
         val, cash_flows, price, accum, shares, div_tot, div = extract_parameters(portfolio)
-        for i in [val, cash_flows, price, accum, shares, div_tot, div]:
-            i[:] = i[date:].ffill()
+        val = val.loc[date:].ffill()
+        cash_flows = cash_flows.loc[date:].ffill()
+        price = price.loc[date:].ffill()
+        accum = accum.loc[date:].ffill()
+        shares = shares.loc[date:].ffill()
+        div_tot = div_tot.loc[date:].ffill()
+        div = div.loc[date:].ffill()
             
     df["Current Value"] = val.iloc[-1]
     # Re

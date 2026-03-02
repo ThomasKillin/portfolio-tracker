@@ -4,6 +4,7 @@ import streamlit as st
 import os
 import pandas as pd
 import data_provider as dp
+import warnings
 
 # Basic webpage setup
 st.set_page_config(
@@ -61,10 +62,21 @@ def process_data(merged_portfolio, target_currency):
     # Perform initial processing of portfolio data
     try:
         portfolio = share.process_data(merged_portfolio)
-        portfolio = share.convert_currency(portfolio, target_currency=target_currency)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", RuntimeWarning)
+            portfolio = share.convert_currency(portfolio, target_currency=target_currency)
     except ValueError as exc:
         st.error(str(exc))
         return False
+
+    fx_warnings = []
+    for w in caught:
+        msg = str(w.message)
+        if "FX" in msg or "currency" in msg.lower():
+            fx_warnings.append(msg)
+
+    for msg in sorted(set(fx_warnings)):
+        st.warning(msg)
 
     st.session_state['portfolio'] = portfolio
     return True
