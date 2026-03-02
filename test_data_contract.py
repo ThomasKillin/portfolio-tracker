@@ -55,10 +55,10 @@ class ShareTrackingContractTests(unittest.TestCase):
         portfolio = pd.DataFrame([[10, 100.0, 0.0]], index=idx, columns=cols)
 
         class FakeTicker:
-            def __init__(self, symbol: str) -> None:
+            def __init__(self, symbol: str, session=None) -> None:  # noqa: ARG002
                 self.symbol = symbol
 
-            def history(self, start=None, auto_adjust=False):  # noqa: ARG002
+            def history(self, start=None, auto_adjust=False, **kwargs):  # noqa: ARG002
                 if self.symbol == "AAA":
                     return pd.DataFrame(
                         {
@@ -69,7 +69,7 @@ class ShareTrackingContractTests(unittest.TestCase):
                     )
                 raise RuntimeError("fetch failed")
 
-        with patch.object(share.yf, "Ticker", side_effect=lambda s: FakeTicker(s)):
+        with patch.object(share.yf, "Ticker", side_effect=lambda s, session=None: FakeTicker(s, session=session)):
             merged = share.merge_pricedata(portfolio, "IDX")
 
         self.assertIn(("$", "AAA"), merged.columns)
@@ -81,9 +81,12 @@ class ShareTrackingContractTests(unittest.TestCase):
         portfolio = make_portfolio_base()
 
         class BadTicker:
-            @property
-            def history_metadata(self):
+            def get_history_metadata(self):
                 raise RuntimeError("no metadata")
+
+            @property
+            def fast_info(self):
+                raise RuntimeError("no fast_info")
 
         with patch.object(share.yf, "Ticker", return_value=BadTicker()):
             with warnings.catch_warnings(record=True) as caught:
