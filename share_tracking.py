@@ -307,6 +307,9 @@ def convert_currency(merged_portfolio, target_currency):
                     f"{base_currency}{target_currency}=X",
                     start=start_date,
                     progress=False,
+                    threads=False,
+                    auto_adjust=False,
+                    multi_level_index=False,
                 )
                 if "Close" not in fx_df.columns:
                     warnings.warn(
@@ -314,7 +317,21 @@ def convert_currency(merged_portfolio, target_currency):
                         RuntimeWarning,
                     )
                     continue
-                exchange_rate = fx_df["Close"].asfreq(freq="B").ffill().reindex(converted_portfolio.index).ffill()
+
+                # yfinance may return either a Series-like close or a DataFrame column block.
+                close_col = fx_df["Close"]
+                if isinstance(close_col, pd.DataFrame):
+                    if close_col.shape[1] == 0:
+                        warnings.warn(
+                            f"Empty FX close matrix for {base_currency}->{target_currency}; leaving {ticker} unchanged.",
+                            RuntimeWarning,
+                        )
+                        continue
+                    close_col = close_col.iloc[:, 0]
+
+                exchange_rate = (
+                    close_col.asfreq(freq="B").ffill().reindex(converted_portfolio.index).ffill()
+                )
                 if exchange_rate.isna().all():
                     warnings.warn(
                         f"Empty FX series for {base_currency}->{target_currency}; leaving {ticker} unchanged.",
