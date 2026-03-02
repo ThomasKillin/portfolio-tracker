@@ -7,6 +7,7 @@ import warnings
 # from datetime import datetime
 import sys
 import yfinance as yf
+import requests
 
 # TODO:
 # Add brokerage column into cost base calculation
@@ -26,6 +27,23 @@ import yfinance as yf
 # add support for multiple currencies
 # add dividends
 # Add automatic control of stock splits
+
+
+def _build_yf_session():
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36"
+            )
+        }
+    )
+    return session
+
+
+_YF_SESSION = _build_yf_session()
 
 
 ###################################################################################################
@@ -126,7 +144,14 @@ def merge_pricedata(portfolio, index):
     tickers = list(portfolio.columns.levels[1]) + [index]
     for i in tickers:
         try:
-            inputdata = yf.Ticker(i).history(start=start_time, auto_adjust=False)
+            inputdata = yf.Ticker(i, session=_YF_SESSION).history(
+                start=start_time,
+                interval="1d",
+                auto_adjust=False,
+                actions=True,
+                repair=True,
+                timeout=20,
+            )
         except Exception as exc:
             failed_tickers[i] = f"request error: {type(exc).__name__}"
             print(f"Warning: failed to fetch {i}: {type(exc).__name__}. Skipping...")
@@ -283,12 +308,24 @@ def convert_currency(merged_portfolio, target_currency):
     converted_portfolio = merged_portfolio.copy()
     # Extract tickers from the merged portfolio
     tickers = converted_portfolio.columns.get_level_values('Company').unique()
+    fx_cache = {}
     
     # Get currencies for each ticker
     currencies = {}
     for ticker in tickers:
         try:
-            currencies[ticker] = yf.Ticker(ticker).history_metadata["currency"]
+            ticker_obj = yf.Ticker(ticker, session=_YF_SESSION)
+            metadata = ticker_obj.get_history_metadata() or {}
+            currency = metadata.get("currency")
+            if not currency:
+                # fast_info can still provide currency when metadata is incomplete
+                try:
+                    currency = ticker_obj.fast_info.get("currency")
+                except Exception:
+                    currency = None
+            if not currency:
+                raise ValueError("currency metadata unavailable")
+            currencies[ticker] = currency
         except Exception as exc:
             warnings.warn(
                 f"Could not determine currency for {ticker}; leaving unchanged. ({type(exc).__name__})",
@@ -303,41 +340,34 @@ def convert_currency(merged_portfolio, target_currency):
         if base_currency != target_currency:
             # Fetch exchange rate data for the entire portfolio date range
             try:
-                fx_df = yf.download(
-                    f"{base_currency}{target_currency}=X",
-                    start=start_date,
-                    progress=False,
-                    threads=False,
-                    auto_adjust=False,
-                    multi_level_index=False,
-                )
-                if "Close" not in fx_df.columns:
-                    warnings.warn(
-                        f"No FX close data for {base_currency}->{target_currency}; leaving {ticker} unchanged.",
-                        RuntimeWarning,
+                pair = (base_currency, target_currency)
+                if pair not in fx_cache:
+                    fx_df = yf.download(
+                        f"{base_currency}{target_currency}=X",
+                        start=start_date,
+                        progress=False,
+                        threads=False,
+                        auto_adjust=False,
+                        multi_level_index=False,
+                        timeout=20,
+                        session=_YF_SESSION,
                     )
-                    continue
+                    if "Close" not in fx_df.columns:
+                        raise ValueError("missing Close column")
 
-                # yfinance may return either a Series-like close or a DataFrame column block.
-                close_col = fx_df["Close"]
-                if isinstance(close_col, pd.DataFrame):
-                    if close_col.shape[1] == 0:
-                        warnings.warn(
-                            f"Empty FX close matrix for {base_currency}->{target_currency}; leaving {ticker} unchanged.",
-                            RuntimeWarning,
-                        )
-                        continue
-                    close_col = close_col.iloc[:, 0]
+                    close_col = fx_df["Close"]
+                    if isinstance(close_col, pd.DataFrame):
+                        if close_col.shape[1] == 0:
+                            raise ValueError("empty FX close matrix")
+                        close_col = close_col.iloc[:, 0]
 
-                exchange_rate = (
-                    close_col.asfreq(freq="B").ffill().reindex(converted_portfolio.index).ffill()
-                )
-                if exchange_rate.isna().all():
-                    warnings.warn(
-                        f"Empty FX series for {base_currency}->{target_currency}; leaving {ticker} unchanged.",
-                        RuntimeWarning,
+                    exchange_rate = (
+                        close_col.asfreq(freq="B").ffill().reindex(converted_portfolio.index).ffill()
                     )
-                    continue
+                    if exchange_rate.isna().all():
+                        raise ValueError("empty FX rate series")
+                    fx_cache[pair] = exchange_rate
+                exchange_rate = fx_cache[pair]
             except Exception as exc:
                 warnings.warn(
                     f"FX download failed for {base_currency}->{target_currency}; leaving {ticker} unchanged. ({type(exc).__name__})",
