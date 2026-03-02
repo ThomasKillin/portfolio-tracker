@@ -8,7 +8,7 @@ import finnhub_tracking as fh
 load_dotenv()
 
 # Default data provider
-DEFAULT_PROVIDER = 'alpha_vantage'
+DEFAULT_PROVIDER = 'yfinance'
 
 def get_data_provider():
     """

@@ -208,6 +208,8 @@ def process_data(portfolio):
     Val = portfolio["$"] * Accum
     # Cash flows into portfolio
     Buy_amt = (portfolio["Price"] * portfolio["Shares"]).fillna(0)
+    # Dividend series (used directly when no adjustment column exists)
+    Div = portfolio["Div"][portfolio_cols]
 
     if "Adjustments" in portfolio.columns:
 
