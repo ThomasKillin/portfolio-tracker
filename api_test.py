@@ -3,7 +3,11 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import requests
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv():
+        return None
 
 import yfinance as yf
 

@@ -2,6 +2,7 @@ import performance_calcs as calc
 import pandas as pd
 import numpy as np
 import seaborn as sns
+import warnings
 
 # from datetime import datetime
 import sys
@@ -72,13 +73,16 @@ def get_userdata(filename):
     import_a.columns.rename(["Params", "Company"], inplace=True)
 
     # Check whether all dates in portfolio are business days. Data may not be captured if not.
+    invalid_dates = []
+    business_days = import_a.sort_index().asfreq(freq="B").index
     for i in import_a.index:
-        if i not in import_a.sort_index().asfreq(freq="B").index:
-            print(
-                "\nWARNING: date {} is not a business day. All dates should be "
-                "business days for correct data capture".format(i)
-            )
-            sys.exit()
+        if i not in business_days:
+            invalid_dates.append(i.strftime("%Y-%m-%d"))
+    if invalid_dates:
+        raise ValueError(
+            "All transaction dates must be business days. Invalid date(s): "
+            + ", ".join(invalid_dates)
+        )
 
     return import_a
 
@@ -114,34 +118,42 @@ def merge_pricedata(portfolio, index):
     # end_time = datetime.today().replace(second=0, microsecond=0).strftime("%m/%d/%Y")
 
     # Fetch stock prices using API and merge with trading data
-    inputdata = {}
     print("\nAPI call in progress...\n")
+    fetched_tickers = []
+    failed_tickers = {}
 
     # Extract list of portfolio tickers
     tickers = list(portfolio.columns.levels[1]) + [index]
     for i in tickers:
-
-        # Extract price data using API
         try:
-            inputdata = (
-                yf.Ticker(i).history(start=start_time, auto_adjust=False).tz_localize(None)
-            )
-        except ValueError:
-            print(f"Error: Stock ticker symbol {i} not found. Skipping...")
-        
+            inputdata = yf.Ticker(i).history(start=start_time, auto_adjust=False)
+        except Exception as exc:
+            failed_tickers[i] = f"request error: {type(exc).__name__}"
+            print(f"Warning: failed to fetch {i}: {type(exc).__name__}. Skipping...")
+            continue
+
+        if inputdata is None or inputdata.empty:
+            failed_tickers[i] = "no rows returned"
+            print(f"Warning: no data returned for {i}. Skipping...")
+            continue
+
+        if "Close" not in inputdata.columns:
+            failed_tickers[i] = "missing Close column"
+            print(f"Warning: missing Close column for {i}. Skipping...")
+            continue
+
+        # Handle timezone-aware indexes from Yahoo
+        if isinstance(inputdata.index, pd.DatetimeIndex) and inputdata.index.tz is not None:
+            inputdata.index = inputdata.index.tz_localize(None)
+
         # Convert price data into dataframe
-        # cols = pd.MultiIndex.from_arrays([['$'], [i]], names = ['Params', 'Company'])
         cols = pd.MultiIndex.from_arrays(
             [["$", "Div"], [i, i]], names=["Params", "Company"]
         )
 
         # Check if 'Dividends' is available in the inputdata
-        if 'Dividends' not in inputdata.columns:
-            inputdata['Dividends'] = 0
-
-        # df = pd.DataFrame(inputdata['Close'].values,
-        #                  index=inputdata.index,
-        #                  columns=cols)
+        if "Dividends" not in inputdata.columns:
+            inputdata["Dividends"] = 0
 
         df = pd.DataFrame(
             inputdata[["Close", "Dividends"]].values,
@@ -153,11 +165,21 @@ def merge_pricedata(portfolio, index):
         portfolio = pd.merge(
             portfolio, df, how="outer", left_index=True, right_index=True
         ).drop_duplicates()
+        fetched_tickers.append(i)
 
     print("API call complete\n")
+    if failed_tickers:
+        print("Warning: some tickers failed to fetch:")
+        for ticker, reason in failed_tickers.items():
+            print(f"  - {ticker}: {reason}")
 
     # Set to 'Business day' datetime frequency
     portfolio = portfolio.sort_index().asfreq(freq="B")
+    portfolio.attrs["price_fetch"] = {
+        "provider": "yfinance",
+        "fetched": fetched_tickers,
+        "failed": failed_tickers,
+    }
 
     # Set accumulated shares for the index to 1, to simplify later calculations
     # portfolio[('Accum', index)] = int(1)
@@ -190,6 +212,16 @@ def process_data(portfolio):
     """
     # Define IndexSlice for dataframe slicing
     idx = pd.IndexSlice
+    available_params = set(portfolio.columns.get_level_values("Params"))
+    required_params = {"$", "Div", "Price", "Shares"}
+    missing_params = sorted(required_params - available_params)
+    if missing_params:
+        raise ValueError(
+            "Merged portfolio is missing required data columns: "
+            + ", ".join(missing_params)
+            + ". Price provider may have returned no market data."
+        )
+
     # Tickers from the portfolio and including the index
     portfolio_cols = portfolio["Shares"].columns
     # Handle Na values.
@@ -226,13 +258,16 @@ def process_data(portfolio):
             * portfolio["Div"][portfolio_cols].cumsum()
         )
 
+    # Keep company-only dividend columns for Div_tot calculation
+    div_base = Div.copy()
+
     # reset column names
     for val, val_name in zip([Val, Buy_amt, Div], ["Val", "Buy_amt", "Div"]):
         val.columns = pd.MultiIndex.from_product(
             [[val_name], portfolio_cols], names=["Params", "Company"]
         )
     # Total dollar value of dividend
-    Div_tot = (portfolio["Div"] * Accum).round(2)
+    Div_tot = (div_base * Accum.droplevel("Params", axis=1)).round(2)
     Div_tot.columns = pd.MultiIndex.from_product(
         [["Div_tot"], portfolio_cols], names=["Params", "Company"]
     )
@@ -253,10 +288,13 @@ def convert_currency(merged_portfolio, target_currency):
     currencies = {}
     for ticker in tickers:
         try:
-            currencies[ticker] = yf.Ticker(ticker).history_metadata['currency']
-        except:
-            # If unable to fetch currency, assume USD
-            currencies[ticker] = 'USD'
+            currencies[ticker] = yf.Ticker(ticker).history_metadata["currency"]
+        except Exception as exc:
+            warnings.warn(
+                f"Could not determine currency for {ticker}; leaving unchanged. ({type(exc).__name__})",
+                RuntimeWarning,
+            )
+            continue
     
     # Get the start and end date for the entire portfolio
     start_date = converted_portfolio.index.min()
@@ -264,9 +302,31 @@ def convert_currency(merged_portfolio, target_currency):
     for ticker, base_currency in currencies.items():
         if base_currency != target_currency:
             # Fetch exchange rate data for the entire portfolio date range
-            exchange_rate = yf.download(f'{base_currency}{target_currency}=X', 
-                                        start=start_date,
-                                        progress=False)['Close'].asfreq(freq='B').ffill()
+            try:
+                fx_df = yf.download(
+                    f"{base_currency}{target_currency}=X",
+                    start=start_date,
+                    progress=False,
+                )
+                if "Close" not in fx_df.columns:
+                    warnings.warn(
+                        f"No FX close data for {base_currency}->{target_currency}; leaving {ticker} unchanged.",
+                        RuntimeWarning,
+                    )
+                    continue
+                exchange_rate = fx_df["Close"].asfreq(freq="B").ffill().reindex(converted_portfolio.index).ffill()
+                if exchange_rate.isna().all():
+                    warnings.warn(
+                        f"Empty FX series for {base_currency}->{target_currency}; leaving {ticker} unchanged.",
+                        RuntimeWarning,
+                    )
+                    continue
+            except Exception as exc:
+                warnings.warn(
+                    f"FX download failed for {base_currency}->{target_currency}; leaving {ticker} unchanged. ({type(exc).__name__})",
+                    RuntimeWarning,
+                )
+                continue
             
             # Apply exchange rate to relevant columns for this ticker
             for param in ['$', 'Price', 'Val', 'Buy_amt', 'Div_tot', 'Div']:

@@ -3,7 +3,11 @@ import numpy as np
 import finnhub
 from datetime import datetime, timedelta
 import os
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv():
+        return None
 
 # Load environment variables
 load_dotenv()
@@ -42,8 +46,9 @@ def merge_pricedata(portfolio, index):
     end_timestamp = int(end_date.timestamp())
 
     # Fetch stock prices using API and merge with trading data
-    inputdata = {}
     print("\nAPI call in progress...\n")
+    fetched_tickers = []
+    failed_tickers = {}
 
     # Extract list of portfolio tickers
     tickers = list(portfolio.columns.levels[1]) + [index]
@@ -70,16 +75,28 @@ def merge_pricedata(portfolio, index):
                 portfolio = pd.merge(
                     portfolio, df, how="outer", left_index=True, right_index=True
                 ).drop_duplicates()
+                fetched_tickers.append(i)
             else:
                 print(f"Error: No data available for stock ticker {i}. Skipping...")
+                failed_tickers[i] = f"status={candle_data.get('s')}"
                 
         except Exception as e:
             print(f"Error fetching data for {i}: {str(e)}")
+            failed_tickers[i] = f"{type(e).__name__}: {e}"
             continue
 
     print("API call complete\n")
+    if failed_tickers:
+        print("Warning: some tickers failed to fetch:")
+        for ticker, reason in failed_tickers.items():
+            print(f"  - {ticker}: {reason}")
 
     # Set to 'Business day' datetime frequency
     portfolio = portfolio.sort_index().asfreq(freq="B")
+    portfolio.attrs["price_fetch"] = {
+        "provider": "finnhub",
+        "fetched": fetched_tickers,
+        "failed": failed_tickers,
+    }
 
     return portfolio 
