@@ -29,6 +29,30 @@ def prepare_data(*args, date=None):
         return prepared_data
     
 
+def _elapsed_years_from_first_nonzero(val, periods_per_year=261):
+    """
+    Compute elapsed years from the first non-zero value.
+    Uses a minimum elapsed period of 1/periods_per_year to avoid zero-year exponents.
+    """
+    if isinstance(val, pd.Series):
+        if (val == 0).all():
+            return pd.Series(1.0, index=val.index, name=val.name)
+
+        start_index = val[val != 0].index[0]
+        elapsed = pd.Series(1.0, index=val.index, name=val.name, dtype=float)
+        elapsed_steps = (np.arange(len(val.loc[start_index:])) + 1) / periods_per_year
+        elapsed.loc[start_index:] = elapsed_steps
+        return elapsed
+
+    if isinstance(val, pd.DataFrame):
+        elapsed_df = pd.DataFrame(index=val.index, columns=val.columns, dtype=float)
+        for col in val.columns:
+            elapsed_df[col] = _elapsed_years_from_first_nonzero(val[col], periods_per_year)
+        return elapsed_df
+
+    raise TypeError("Input must be pandas Series or DataFrame")
+
+
 def average_price(cash_flows, shares, date=None):
     '''
     Calculate average buy price based on number of shares accumulated and cash flows into the 
@@ -225,20 +249,8 @@ def basic_return_annualised(val, cash_flows, date=None, use_initial_CF=False):
     val = val.loc[date:]
     cash_flows = cash_flows.loc[date:]
     
-    # Find the first non-zero row of each col - which becomes the start date for calculating the
-    # num_years. Set num_years to 1 if (val==0).all() to avoid divide by zero error
-    # Assume 261 business days in a calender year
-    if isinstance(val, pd.DataFrame):
-        num_years = val.apply(lambda x: (pd.Series(x.loc[x.ne(0).idxmax():].reset_index().index.values, 
-                                                   index=x.loc[x.ne(0).idxmax():].index) / 261) 
-                              if not (x == 0).all() 
-                              else pd.Series(1, index=x.index)) 
-    
-    if isinstance(val, pd.Series):
-        num_years = ((pd.Series(val.loc[val.ne(0).idxmax():].reset_index().index.values, 
-                              index=val.loc[val.ne(0).idxmax():].index) / 261) 
-                          if not (val == 0).all() 
-                          else pd.Series(1, index=val.index))
+    # Find elapsed years from first non-zero point and avoid zero-year exponents.
+    num_years = _elapsed_years_from_first_nonzero(val)
     
     basic_ret_ann = np.power(basic_return(val, cash_flows, use_initial_CF=use_initial_CF) + 1, 
                              1 / num_years) - 1
@@ -282,20 +294,8 @@ def basic_total_return_annualised(val, cash_flows, div, date=None, use_initial_C
     cash_flows = cash_flows.loc[date:]
     div = div.loc[date:]
     
-    # Find the first non-zero row of each col - which becomes the start date for calculating the
-    # num_years. Set num_years to 1 if (val==0).all() to avoid divide by zero error
-    # Assume 261 business days in a calender year
-    if isinstance(val, pd.DataFrame):
-        num_years = val.apply(lambda x: (pd.Series(x.loc[x.ne(0).idxmax():].reset_index().index.values, 
-                                                   index=x.loc[x.ne(0).idxmax():].index) / 261) 
-                              if not (x == 0).all() 
-                              else pd.Series(1, index=x.index)) 
-    
-    if isinstance(val, pd.Series):
-        num_years = ((pd.Series(val.loc[val.ne(0).idxmax():].reset_index().index.values, 
-                              index=val.loc[val.ne(0).idxmax():].index) / 261) 
-                          if not (val == 0).all() 
-                          else pd.Series(1, index=val.index))
+    # Find elapsed years from first non-zero point and avoid zero-year exponents.
+    num_years = _elapsed_years_from_first_nonzero(val)
     
     basic_tot_ret_ann = np.power(basic_total_return(val, cash_flows, div, use_initial_CF=use_initial_CF) + 1, 
                              1 / num_years) - 1
@@ -342,8 +342,9 @@ def daily_portfolio_pct_gain(val, price):
 
     '''
     
-    gain = ((val.shift(1) * price.pct_change()).sum(axis=1) / val.shift(1).sum(axis=1)
-            .fillna(0))
+    weighted_changes = (val.shift(1) * price.pct_change()).sum(axis=1)
+    previous_value = val.shift(1).sum(axis=1).replace(0, np.nan)
+    gain = (weighted_changes / previous_value).replace([np.inf, -np.inf], np.nan).fillna(0)
     
     return gain   
 
@@ -567,15 +568,13 @@ def time_weighted_return_annualised(val, cash_flows, date=None, use_initial_CF=F
     # Prepare the data
     val, cash_flows = prepare_data(val, cash_flows, date=date)      
     
-    # Find the first non-zero row of each col - which becomes the start date for calculating the
-    # num_years. Set num_years to 1 if (val==0).all() to avoid divide by zero error
-    # Assume 261 business days in a calender year
-    num_years = val.apply(lambda x: (pd.Series(x.loc[x.ne(0).idxmax():].reset_index().index.values, 
-                                                   index=x.loc[x.ne(0).idxmax():].index) / 261) 
-                              if not (x == 0).all() 
-                              else pd.Series(1, index=x.index)) 
+    # Find elapsed years from first non-zero point and avoid zero-year exponents.
+    num_years = _elapsed_years_from_first_nonzero(val)
        
-    MDR_ann = np.power(time_weighted_return(val, cash_flows) + 1, 1 / num_years) - 1
+    MDR_ann = np.power(
+        time_weighted_return(val, cash_flows, use_initial_CF=use_initial_CF) + 1,
+        1 / num_years,
+    ) - 1
         
     return MDR_ann
 
@@ -615,15 +614,13 @@ def time_weighted_total_return_annualised(val, cash_flows, div, date=None, use_i
     # Prepare the data
     val, cash_flows, div = prepare_data(val, cash_flows, div, date=date)
     
-    # Find the first non-zero row of each col - which becomes the start date for calculating the
-    # num_years. Set num_years to 1 if (val==0).all() to avoid divide by zero error
-    # Assume 261 business days in a calender year
-    num_years = val.apply(lambda x: (pd.Series(x.loc[x.ne(0).idxmax():].reset_index().index.values, 
-                                                   index=x.loc[x.ne(0).idxmax():].index) / 261) 
-                              if not (x == 0).all() 
-                              else pd.Series(1, index=x.index)) 
+    # Find elapsed years from first non-zero point and avoid zero-year exponents.
+    num_years = _elapsed_years_from_first_nonzero(val)
        
-    MDR_ann = np.power(time_weighted_total_return(val, cash_flows, div) + 1, 1 / num_years) - 1
+    MDR_ann = np.power(
+        time_weighted_total_return(val, cash_flows, div, use_initial_CF=use_initial_CF) + 1,
+        1 / num_years,
+    ) - 1
         
     return MDR_ann
 
@@ -716,7 +713,7 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
             # This matches the methodology used for Basic Return calc.
             # Initial value of stock holding
             initial_val = vcol.iloc[0]
-            if not use_initial_CF or not initial_val:
+            if (not use_initial_CF) or (initial_val == 0):
                 irr_series.iloc[0] = -vcol.iloc[0]
 
             # Resample data
@@ -747,25 +744,22 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
                 .ffill()
             ), name=column).set_axis(irr_series.index)
         """
-            # Resample data
-            irr_series = irr_series.resample(resample_freq).sum()
-            vcol_ = vcol.resample(resample_freq).last()
-
             # Calculate IRR for each period
-            periods = pd.DataFrame(irr_series).reset_index()
-            periods['irr'] = periods.apply(
-                lambda x: npf.irr(np.concatenate([
-                    np.array(irr_series.iloc[0:x.name + 1]),
-                    [vcol_.iloc[x.name]]
-                ])),
-                axis=1
-            )
-            
-        # Calculate total periods and convert to total return
-        periods['total_return'] = (1 + periods['irr']) ** (periods.index + 1) - 1
-        
-        DWR_individual = pd.Series(periods['total_return'].values, index=periods['Date'], name=column).fillna(0)
-        
+            irr_values = []
+            for period_end in range(len(irr_series)):
+                cash_stream = np.concatenate(
+                    [irr_series.iloc[: period_end + 1].to_numpy(), [vcol_.iloc[period_end]]]
+                )
+                irr_values.append(npf.irr(cash_stream))
+
+            irr_calc = pd.Series(irr_values, index=irr_series.index, name=column)
+
+            # Convert periodic IRR to cumulative return since start
+            period_count = np.arange(1, len(irr_calc) + 1)
+            DWR_individual = (
+                np.power(1 + irr_calc, period_count) - 1
+            ).replace([np.inf, -np.inf], np.nan).fillna(0).replace(-1, np.nan).ffill()
+
         DWR = pd.merge(DWR, DWR_individual, how='outer', left_index=True, right_index=True)
 
     """
@@ -883,28 +877,29 @@ def dollar_weighted_total_return(val, cash_flows, div, date=None, use_initial_CF
             # Otherwise the first cash flow can be used as the initial portfolio val (V0)
             # This matches the methodology used for Basic Return calc.
             
-            if not use_initial_CF or not initial_val:
+            if (not use_initial_CF) or (initial_val == 0):
                 irr_series.iloc[0] = -vcol.iloc[0]
 
             # Resample data
             irr_series = irr_series.resample(resample_freq).sum()
             vcol_ = vcol.resample(resample_freq).last()
             
-            # Calculate IRR for each period, representing total return since start
-            periods = pd.DataFrame(irr_series).reset_index()
-            periods['irr'] = periods.apply(
-                lambda x: npf.irr(np.concatenate([
-                    np.array(irr_series.iloc[0:x.name + 1]),
-                    [vcol_.iloc[x.name]]
-                ])),
-                axis=1
-            )
-            
-        # Calculate total periods and convert to total return
-        periods['total_return'] = (1 + periods['irr']) ** (periods.index + 1) - 1
-        
-        DWR_individual = pd.Series(periods['total_return'].values, index=periods['Date'], name=column).fillna(0)
-        
+            # Calculate IRR for each period
+            irr_values = []
+            for period_end in range(len(irr_series)):
+                cash_stream = np.concatenate(
+                    [irr_series.iloc[: period_end + 1].to_numpy(), [vcol_.iloc[period_end]]]
+                )
+                irr_values.append(npf.irr(cash_stream))
+
+            irr_calc = pd.Series(irr_values, index=irr_series.index, name=column)
+
+            # Convert periodic IRR to cumulative return since start
+            period_count = np.arange(1, len(irr_calc) + 1)
+            DWR_individual = (
+                np.power(1 + irr_calc, period_count) - 1
+            ).replace([np.inf, -np.inf], np.nan).fillna(0).replace(-1, np.nan).ffill()
+
         DWR = pd.merge(DWR, DWR_individual, how='outer', left_index=True, right_index=True)
 
     return DWR
