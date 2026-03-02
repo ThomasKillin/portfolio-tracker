@@ -46,6 +46,22 @@ def _build_yf_session():
 _YF_SESSION = _build_yf_session()
 
 
+def _extract_ticker_history(download_df, ticker, single_ticker=False):
+    """
+    Normalize yfinance.download output to a per-ticker DataFrame.
+    """
+    if download_df is None or download_df.empty:
+        return pd.DataFrame()
+
+    if single_ticker:
+        return download_df
+
+    if isinstance(download_df.columns, pd.MultiIndex):
+        if ticker in download_df.columns.get_level_values(0):
+            return download_df[ticker]
+    return pd.DataFrame()
+
+
 ###################################################################################################
 def get_userdata(filename):
     """
@@ -141,22 +157,33 @@ def merge_pricedata(portfolio, index):
     failed_tickers = {}
 
     # Extract list of portfolio tickers
-    tickers = list(portfolio.columns.levels[1]) + [index]
-    for i in tickers:
-        try:
-            inputdata = yf.Ticker(i, session=_YF_SESSION).history(
-                start=start_time,
-                interval="1d",
-                auto_adjust=False,
-                actions=True,
-                repair=True,
-                timeout=20,
-            )
-        except Exception as exc:
-            failed_tickers[i] = f"request error: {type(exc).__name__}"
-            print(f"Warning: failed to fetch {i}: {type(exc).__name__}. Skipping...")
-            continue
+    tickers = list(dict.fromkeys(list(portfolio.columns.levels[1]) + [index]))
+    if not tickers:
+        return portfolio
 
+    try:
+        batch = yf.download(
+            tickers=tickers,
+            start=start_time,
+            interval="1d",
+            auto_adjust=False,
+            actions=True,
+            repair=True,
+            progress=False,
+            threads=False,
+            timeout=20,
+            session=_YF_SESSION,
+            group_by="ticker",
+            multi_level_index=True,
+        )
+    except Exception as exc:
+        for t in tickers:
+            failed_tickers[t] = f"batch request error: {type(exc).__name__}"
+        batch = pd.DataFrame()
+
+    single_ticker = len(tickers) == 1
+    for i in tickers:
+        inputdata = _extract_ticker_history(batch, i, single_ticker=single_ticker)
         if inputdata is None or inputdata.empty:
             failed_tickers[i] = "no rows returned"
             print(f"Warning: no data returned for {i}. Skipping...")
@@ -167,16 +194,13 @@ def merge_pricedata(portfolio, index):
             print(f"Warning: missing Close column for {i}. Skipping...")
             continue
 
-        # Handle timezone-aware indexes from Yahoo
         if isinstance(inputdata.index, pd.DatetimeIndex) and inputdata.index.tz is not None:
             inputdata.index = inputdata.index.tz_localize(None)
 
-        # Convert price data into dataframe
         cols = pd.MultiIndex.from_arrays(
             [["$", "Div"], [i, i]], names=["Params", "Company"]
         )
 
-        # Check if 'Dividends' is available in the inputdata
         if "Dividends" not in inputdata.columns:
             inputdata["Dividends"] = 0
 
@@ -186,7 +210,6 @@ def merge_pricedata(portfolio, index):
             columns=cols,
         )
 
-        # Merge portfolio and prices dataframes
         portfolio = pd.merge(
             portfolio, df, how="outer", left_index=True, right_index=True
         ).drop_duplicates()

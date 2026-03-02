@@ -5,6 +5,8 @@ import os
 import pandas as pd
 import data_provider as dp
 import warnings
+import re
+from collections import defaultdict
 
 # Basic webpage setup
 st.set_page_config(
@@ -74,8 +76,38 @@ def process_data(merged_portfolio, target_currency):
         msg = str(w.message)
         if "FX" in msg or "currency" in msg.lower():
             fx_warnings.append(msg)
+    fx_pair_failures = defaultdict(set)
+    unknown_currency_tickers = set()
+    other_fx_messages = set()
 
-    for msg in sorted(set(fx_warnings)):
+    for msg in fx_warnings:
+        fx_match = re.search(r"for ([A-Z]{3})->([A-Z]{3}); leaving ([^ ]+) unchanged", msg)
+        if fx_match:
+            pair = f"{fx_match.group(1)}->{fx_match.group(2)}"
+            fx_pair_failures[pair].add(fx_match.group(3))
+            continue
+
+        unknown_match = re.search(r"Could not determine currency for ([^;]+);", msg)
+        if unknown_match:
+            unknown_currency_tickers.add(unknown_match.group(1))
+            continue
+
+        other_fx_messages.add(msg)
+
+    for pair, tickers in sorted(fx_pair_failures.items()):
+        st.warning(
+            f"FX conversion unavailable for {pair}. "
+            f"Left {len(tickers)} ticker(s) unchanged: {', '.join(sorted(tickers))}."
+        )
+
+    if unknown_currency_tickers:
+        st.warning(
+            "Currency metadata unavailable for "
+            + ", ".join(sorted(unknown_currency_tickers))
+            + ". Left unchanged."
+        )
+
+    for msg in sorted(other_fx_messages):
         st.warning(msg)
 
     st.session_state['portfolio'] = portfolio
