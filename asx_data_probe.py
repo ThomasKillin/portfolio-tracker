@@ -1,4 +1,5 @@
 import argparse
+import io
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -80,7 +81,6 @@ def check_yfinance_ticker_history(ticker: str) -> CheckResult:
             interval="1d",
             auto_adjust=False,
             actions=True,
-            repair=True,
             prepost=False,
         )
         if isinstance(df.index, pd.DatetimeIndex):
@@ -156,7 +156,7 @@ def check_stooq_daily_csv(ticker: str) -> CheckResult:
         if len(lines) <= 1:
             return CheckResult("stooq.csv", ticker, "FAILED", 0, None, None, 0.0, False, "Header only")
 
-        df = pd.read_csv(pd.io.common.StringIO(text), parse_dates=["Date"])  # type: ignore[arg-type]
+        df = pd.read_csv(io.StringIO(text), parse_dates=["Date"])
         df = df.sort_values("Date")
         idx = pd.DatetimeIndex(df["Date"])
         probe = pd.DataFrame(index=idx)
@@ -225,7 +225,10 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_TICKERS,
         help="ASX tickers (with or without .AX suffix)",
     )
-    return parser.parse_args()
+    # In notebook/interactive kernels, extra args like "-f <kernel.json>" are injected.
+    # parse_known_args lets this script run in those environments without failing.
+    args, _unknown = parser.parse_known_args()
+    return args
 
 
 def main() -> int:

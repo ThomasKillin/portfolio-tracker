@@ -10,7 +10,7 @@ filename = r'C:\Python\portfolio-tracker\deprecated\shares_check_QBE.csv'
 import_a = share_tracking.get_userdata(filename)
 #portfolio = alpha_vantage_tracking.merge_pricedata(import_a, 'NVDA')
 #portfolio = share_tracking.merge_pricedata(import_a, 'STW.AX')
-portfolio = finnhub_tracking.merge_pricedata(import_a, 'STW.AX')
+portfolio = share_tracking.merge_pricedata(import_a, 'STW.AX')
 processed_portfolio = share_tracking.process_data(portfolio)
 
 # Convert the portfolio to a target currency (e.g., AUD)
