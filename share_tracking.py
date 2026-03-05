@@ -7,43 +7,22 @@ import warnings
 # from datetime import datetime
 import sys
 import yfinance as yf
-import requests
 
 # TODO:
-# Add brokerage column into cost base calculation
 # Allow specification of a subset of dates when plotting portfolio performance
 # calc_stockdata - change time(t) to be days, not business days
 # stock_summary - check whether supplied date argument is a business day
 # Dividend metrics
 # csv file columns case insensitive
 # allow for multiple sales or purcahses in a single day
-# add dollar weighted return calculation
 # Add first purchase date in stock_summary()
 # Print time period when displaying summary table and summary plots
 # total return - last value before all shares sold
 # Date to US format
-# fix average price calc for reduced data range
 # fix graph legend if single stock holding
 # add support for multiple currencies
 # add dividends
 # Add automatic control of stock splits
-
-
-def _build_yf_session():
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/126.0.0.0 Safari/537.36"
-            )
-        }
-    )
-    return session
-
-
-_YF_SESSION = _build_yf_session()
 
 
 def _extract_ticker_history(download_df, ticker, single_ticker=False):
@@ -62,6 +41,21 @@ def _extract_ticker_history(download_df, ticker, single_ticker=False):
     return pd.DataFrame()
 
 
+def _download_single_ticker_history(ticker, start_time):
+    try:
+        single = yf.Ticker(ticker).history(
+            start=start_time,
+            interval="1d",
+            auto_adjust=False,
+            actions=True,
+            repair=True,
+            timeout=20,
+        )
+    except Exception:
+        return pd.DataFrame()
+    return single if isinstance(single, pd.DataFrame) else pd.DataFrame()
+
+
 ###################################################################################################
 def get_userdata(filename):
     """
@@ -71,6 +65,7 @@ def get_userdata(filename):
         'Shares' : Number of shares bought or sold (negative number = sold)
         'Date' : Date in DD/MM/YYYY format
         'Price' : Price paid/received per share
+        'Brokerage' : (Optional column) Transaction fee added to cost base/cash flow.
         'Adjustments' : (Optional column) This column allow for a cost base adjustment to be made.
         Eg, if a company restructure takes place, a portion of the cost base may be split into a
         new entity. The number entered into the 'Adjustments' column represents the portion of
@@ -95,7 +90,7 @@ def get_userdata(filename):
 
     # Drop non-required columns, drop NaN rows, drop NaN rows in index, Unstack 'Company' col
     import_a = import_a.drop(
-        import_a.columns.difference(["Shares", "Price", "Adjustments"]), axis=1
+        import_a.columns.difference(["Shares", "Price", "Brokerage", "Adjustments"]), axis=1
     ).dropna(how="all")
     import_a = import_a.loc[import_a.index.dropna()].unstack(level=0)
 
@@ -172,7 +167,6 @@ def merge_pricedata(portfolio, index):
             progress=False,
             threads=False,
             timeout=20,
-            session=_YF_SESSION,
             group_by="ticker",
             multi_level_index=True,
         )
@@ -181,39 +175,65 @@ def merge_pricedata(portfolio, index):
             failed_tickers[t] = f"batch request error: {type(exc).__name__}"
         batch = pd.DataFrame()
 
+    # If batch is empty, retry per ticker to avoid an all-or-nothing failure.
+    if batch is None or batch.empty:
+        for t in tickers:
+            inputdata = _download_single_ticker_history(t, start_time)
+            if inputdata is None or inputdata.empty:
+                failed_tickers[t] = "no rows returned"
+                continue
+            if isinstance(inputdata.index, pd.DatetimeIndex) and inputdata.index.tz is not None:
+                inputdata.index = inputdata.index.tz_localize(None)
+            if "Close" not in inputdata.columns:
+                failed_tickers[t] = "missing Close column"
+                continue
+            if "Dividends" not in inputdata.columns:
+                inputdata["Dividends"] = 0
+            cols = pd.MultiIndex.from_arrays([["$", "Div"], [t, t]], names=["Params", "Company"])
+            df = pd.DataFrame(
+                inputdata[["Close", "Dividends"]].values,
+                index=inputdata.index,
+                columns=cols,
+            )
+            portfolio = pd.merge(portfolio, df, how="outer", left_index=True, right_index=True).drop_duplicates()
+            fetched_tickers.append(t)
+
+        batch = None  # signal that fallback handled merging
+
     single_ticker = len(tickers) == 1
-    for i in tickers:
-        inputdata = _extract_ticker_history(batch, i, single_ticker=single_ticker)
-        if inputdata is None or inputdata.empty:
-            failed_tickers[i] = "no rows returned"
-            print(f"Warning: no data returned for {i}. Skipping...")
-            continue
+    if batch is not None:
+        for i in tickers:
+            inputdata = _extract_ticker_history(batch, i, single_ticker=single_ticker)
+            if inputdata is None or inputdata.empty:
+                failed_tickers[i] = "no rows returned"
+                print(f"Warning: no data returned for {i}. Skipping...")
+                continue
 
-        if "Close" not in inputdata.columns:
-            failed_tickers[i] = "missing Close column"
-            print(f"Warning: missing Close column for {i}. Skipping...")
-            continue
+            if "Close" not in inputdata.columns:
+                failed_tickers[i] = "missing Close column"
+                print(f"Warning: missing Close column for {i}. Skipping...")
+                continue
 
-        if isinstance(inputdata.index, pd.DatetimeIndex) and inputdata.index.tz is not None:
-            inputdata.index = inputdata.index.tz_localize(None)
+            if isinstance(inputdata.index, pd.DatetimeIndex) and inputdata.index.tz is not None:
+                inputdata.index = inputdata.index.tz_localize(None)
 
-        cols = pd.MultiIndex.from_arrays(
-            [["$", "Div"], [i, i]], names=["Params", "Company"]
-        )
+            cols = pd.MultiIndex.from_arrays(
+                [["$", "Div"], [i, i]], names=["Params", "Company"]
+            )
 
-        if "Dividends" not in inputdata.columns:
-            inputdata["Dividends"] = 0
+            if "Dividends" not in inputdata.columns:
+                inputdata["Dividends"] = 0
 
-        df = pd.DataFrame(
-            inputdata[["Close", "Dividends"]].values,
-            index=inputdata.index,
-            columns=cols,
-        )
+            df = pd.DataFrame(
+                inputdata[["Close", "Dividends"]].values,
+                index=inputdata.index,
+                columns=cols,
+            )
 
-        portfolio = pd.merge(
-            portfolio, df, how="outer", left_index=True, right_index=True
-        ).drop_duplicates()
-        fetched_tickers.append(i)
+            portfolio = pd.merge(
+                portfolio, df, how="outer", left_index=True, right_index=True
+            ).drop_duplicates()
+            fetched_tickers.append(i)
 
     print("API call complete\n")
     if failed_tickers:
@@ -274,8 +294,11 @@ def process_data(portfolio):
     portfolio_cols = portfolio["Shares"].columns
     # Handle Na values.
     portfolio["$"] = portfolio["$"].ffill().fillna(0)
-    portfolio.loc[:, idx[["Shares", "Price", "Div"], :]] = portfolio.loc[
-        :, idx[["Shares", "Price", "Div"], :]
+    fill_params = ["Shares", "Price", "Div"]
+    if "Brokerage" in available_params:
+        fill_params.append("Brokerage")
+    portfolio.loc[:, idx[fill_params, :]] = portfolio.loc[
+        :, idx[fill_params, :]
     ].fillna(0)
     # Accumulated shares
     Accum = (
@@ -288,6 +311,8 @@ def process_data(portfolio):
     Val = portfolio["$"] * Accum
     # Cash flows into portfolio
     Buy_amt = (portfolio["Price"] * portfolio["Shares"]).fillna(0)
+    if "Brokerage" in portfolio.columns:
+        Buy_amt = Buy_amt + portfolio["Brokerage"][portfolio_cols].fillna(0)
     # Dividend series (used directly when no adjustment column exists)
     Div = portfolio["Div"][portfolio_cols]
 
@@ -337,7 +362,7 @@ def convert_currency(merged_portfolio, target_currency):
     currencies = {}
     for ticker in tickers:
         try:
-            ticker_obj = yf.Ticker(ticker, session=_YF_SESSION)
+            ticker_obj = yf.Ticker(ticker)
             metadata = ticker_obj.get_history_metadata() or {}
             currency = metadata.get("currency")
             if not currency:
@@ -373,7 +398,6 @@ def convert_currency(merged_portfolio, target_currency):
                         auto_adjust=False,
                         multi_level_index=False,
                         timeout=20,
-                        session=_YF_SESSION,
                     )
                     if "Close" not in fx_df.columns:
                         raise ValueError("missing Close column")
@@ -501,239 +525,152 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
         Dataframe containing the summary metrics.
     """
         
-    val, cash_flows, price, accum, shares, div_tot, div = extract_parameters(portfolio)
-    init_CF = price.shape == price[date:].shape
+    if currency:
+        portfolio = convert_currency(portfolio, target_currency=currency)
 
-    # Get the price, filtered by date only, for use in daily return calc
-    price_all = price[date:]
-    # Filter by date and forward fill
-    val = val.loc[date:].ffill()
-    cash_flows = cash_flows.loc[date:].ffill()
-    price = price.loc[date:].ffill()
-    accum = accum.loc[date:].ffill()
-    shares = shares.loc[date:].ffill()
-    div_tot = div_tot.loc[date:].ffill()
-    div = div.loc[date:].ffill()
+    val_full, cash_flows_full, price_full, accum_full, shares_full, div_tot_full, div_full = extract_parameters(portfolio)
+    init_CF = price_full.shape == price_full[date:].shape
 
-    # init_CF = (True if date == None else False)
+    price_all = price_full[date:]
+    val = val_full.loc[date:].ffill()
+    cash_flows = cash_flows_full.loc[date:].ffill()
+    price = price_full.loc[date:].ffill()
+    accum = accum_full.loc[date:].ffill()
+    shares = shares_full.loc[date:].ffill()
+    div_tot = div_tot_full.loc[date:].ffill()
+    div = div_full.loc[date:].ffill()
+
+    def _annualised_from_cumulative(cum_ret, base_val):
+        years = calc._elapsed_years_from_first_nonzero(base_val).iloc[-1]
+        return (np.power(1 + cum_ret, 1 / years) - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
+
+    def _single_dwr_series(dwr_result):
+        if isinstance(dwr_result, pd.DataFrame):
+            if dwr_result.empty:
+                return pd.Series(dtype=float)
+            return dwr_result.iloc[:, 0]
+        return dwr_result
+
+    def _dwr_last_by_asset(dwr_result, asset_cols):
+        if isinstance(dwr_result, pd.DataFrame):
+            if dwr_result.empty:
+                return pd.Series(0.0, index=asset_cols)
+            last = dwr_result.iloc[-1]
+            if len(last.index) == len(asset_cols):
+                last = pd.Series(last.to_numpy(), index=asset_cols)
+            return last.reindex(asset_cols).fillna(0)
+        if isinstance(dwr_result, pd.Series):
+            return pd.Series(float(dwr_result.iloc[-1]), index=asset_cols[:1])
+        return pd.Series(0.0, index=asset_cols)
+
+    def _last_scalar(result):
+        if isinstance(result, pd.DataFrame):
+            return float(result.iloc[-1, 0])
+        if isinstance(result, pd.Series):
+            return float(result.iloc[-1])
+        return float(result)
 
     df = pd.DataFrame()
     df.index.name = "Company"
 
-    # STOCKS SUMMARY
-    # No currency conversion used for these
-    df["Average Price"] = calc.average_price(cash_flows, shares).iloc[-1]
+    avg_price = calc.average_price(cash_flows_full, shares_full).ffill().reindex(val.index).ffill().fillna(0)
+    df["Average Price"] = avg_price.iloc[-1]
     df["Current Price"] = price.iloc[-1]
     df["Current Holdings"] = accum.iloc[-1]
-    
-    # Use base currency for caurrent value and % return calcs
-    if currency:
-        portfolio = convert_currency(portfolio, target_currency=currency)
-        val, cash_flows, price, accum, shares, div_tot, div = extract_parameters(portfolio)
-        val = val.loc[date:].ffill()
-        cash_flows = cash_flows.loc[date:].ffill()
-        price = price.loc[date:].ffill()
-        accum = accum.loc[date:].ffill()
-        shares = shares.loc[date:].ffill()
-        div_tot = div_tot.loc[date:].ffill()
-        div = div.loc[date:].ffill()
-            
     df["Current Value"] = val.iloc[-1]
-    # Re
     df["Daily Return (%)"] = (
         calc.daily_pct_gain(price_all.drop(labels=index, axis=1)).ffill().iloc[-1] * 100
     )
     df.loc[df["Current Holdings"] == 0, "Daily Return (%)"] = 0
 
     if calc_method == "basic":
-        df["Total Return (%)"] = (
-            calc.basic_return(val, cash_flows, use_initial_CF=init_CF).iloc[-1].values
-            * 100
-        )
-        df["Annualised Return (%)"] = (
-            calc.basic_return_annualised(val, cash_flows, use_initial_CF=init_CF)
-            .iloc[-1]
-            .values
-            * 100
-        )
-        df["Time Weighted Return (%)"] = (
-            calc.time_weighted_return(val, cash_flows, use_initial_CF=init_CF)
-            .iloc[-1]
-            .values
-            * 100
-        )
-        df["Annualised Time Weighted Return (%)"] = (
-            calc.time_weighted_return_annualised(
-                val, cash_flows, use_initial_CF=init_CF
-            )
-            .iloc[-1]
-            .values
-            * 100
-        )
-
+        total_ret = calc.basic_return(val, cash_flows, use_initial_CF=init_CF)
+        ann_ret = calc.basic_return_annualised(val, cash_flows, use_initial_CF=init_CF)
+        twr = calc.time_weighted_return(val, cash_flows, use_initial_CF=init_CF)
+        ann_twr = calc.time_weighted_return_annualised(val, cash_flows, use_initial_CF=init_CF)
+        dwr = calc.dollar_weighted_return(val, cash_flows, use_initial_CF=init_CF)
     elif calc_method == "total":
-        df["Total Return (%)"] = (
-            calc.basic_total_return(val, cash_flows, div_tot, use_initial_CF=init_CF)
-            .iloc[-1]
-            .values
-            * 100
-        )
-        df["Annualised Return (%)"] = (
-            calc.basic_total_return_annualised(
-                val, cash_flows, div_tot, use_initial_CF=init_CF
-            )
-            .iloc[-1]
-            .values
-            * 100
-        )
-        df["Time Weighted Return (%)"] = (
-            calc.time_weighted_total_return(
-                val, cash_flows, div_tot, use_initial_CF=init_CF
-            )
-            .iloc[-1]
-            .values
-            * 100
-        )
-        df["Annualised Time Weighted Return (%)"] = (
-            calc.time_weighted_total_return_annualised(
-                val, cash_flows, div_tot, use_initial_CF=init_CF
-            )
-            .iloc[-1]
-            .values
-            * 100
-        )
-
+        total_ret = calc.basic_total_return(val, cash_flows, div_tot, use_initial_CF=init_CF)
+        ann_ret = calc.basic_total_return_annualised(val, cash_flows, div_tot, use_initial_CF=init_CF)
+        twr = calc.time_weighted_total_return(val, cash_flows, div_tot, use_initial_CF=init_CF)
+        ann_twr = calc.time_weighted_total_return_annualised(val, cash_flows, div_tot, use_initial_CF=init_CF)
+        dwr = calc.dollar_weighted_total_return(val, cash_flows, div_tot, use_initial_CF=init_CF)
     else:
-        raise ValueError(
-            'Invalid calculation method. Please choose "basic" or "total".'
-        )
+        raise ValueError('Invalid calculation method. Please choose "basic" or "total".')
+
+    dwr_last = _dwr_last_by_asset(dwr, val.columns)
+    years_last = calc._elapsed_years_from_first_nonzero(val).iloc[-1].reindex(val.columns).replace(0, np.nan)
+    ann_dwr_last = (np.power(1 + dwr_last, 1 / years_last) - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
+
+    df["Total Return (%)"] = total_ret.iloc[-1].values * 100
+    df["Ann. Return (%)"] = ann_ret.iloc[-1].values * 100
+    df["TWR (%)"] = twr.iloc[-1].values * 100
+    df["Ann. TWR (%)"] = ann_twr.iloc[-1].values * 100
+    df["DWR (%)"] = dwr_last.values * 100
+    df["Ann. DWR (%)"] = ann_dwr_last.values * 100
 
     df = df.sort_index().reset_index()
-    # di['Current Holdings'] = di['Current Holdings'].astype(int)
 
-    # TOTAL ROW
     end_idx = len(df.index)
-
     df.loc[end_idx, "Company"] = "TOTAL"
     df.loc[end_idx, "Current Value"] = df["Current Value"].sum()
-    df.loc[end_idx, "Daily Return (%)"] = (
-        calc.daily_portfolio_pct_gain(val, price).iloc[-1] * 100
-    )
-    
-    if calc_method == 'basic':
-        df.loc[end_idx, "Total Return (%)"] = (
-            calc.basic_return(
-                val.sum(axis=1), cash_flows.sum(axis=1), use_initial_CF=init_CF
-            ).iloc[-1]
-            * 100
-        )
-        df.loc[end_idx, "Annualised Return (%)"] = (
-            calc.basic_return_annualised(
-                val.sum(axis=1), cash_flows.sum(axis=1), use_initial_CF=init_CF
-            ).iloc[-1]
-            * 100
-        )
-        df.loc[end_idx, "Time Weighted Return (%)"] = (
-            calc.time_weighted_return(
-                val.sum(axis=1), cash_flows.sum(axis=1), use_initial_CF=init_CF
-            )
-            .iloc[-1]
-            .values
-            * 100
-        )
-        df.loc[end_idx, "Annualised Time Weighted Return (%)"] = (
-            calc.time_weighted_return_annualised(
-                val.sum(axis=1), cash_flows.sum(axis=1), use_initial_CF=init_CF
-            )
-            .iloc[-1]
-            .values
-            * 100
-        )
+    df.loc[end_idx, "Daily Return (%)"] = calc.daily_portfolio_pct_gain(val, price).iloc[-1] * 100
+
+    total_val = val.sum(axis=1)
+    total_cf = cash_flows.sum(axis=1)
+    total_div = div_tot.sum(axis=1)
+
+    if calc_method == "basic":
+        total_ret_s = calc.basic_return(total_val, total_cf, use_initial_CF=init_CF)
+        ann_ret_s = calc.basic_return_annualised(total_val, total_cf, use_initial_CF=init_CF)
+        twr_s = calc.time_weighted_return(total_val, total_cf, use_initial_CF=init_CF)
+        ann_twr_s = calc.time_weighted_return_annualised(total_val, total_cf, use_initial_CF=init_CF)
+        dwr_s = _single_dwr_series(calc.dollar_weighted_return(total_val, total_cf, use_initial_CF=init_CF))
     else:
-        df.loc[end_idx, "Total Return (%)"] = (
-            calc.basic_total_return(
-                val.sum(axis=1), cash_flows.sum(axis=1), div_tot.sum(axis=1), 
-                use_initial_CF=init_CF
-            ).iloc[-1]
-            * 100
-        )
-        df.loc[end_idx, "Annualised Return (%)"] = (
-            calc.basic_total_return_annualised(
-                val.sum(axis=1), cash_flows.sum(axis=1), div_tot.sum(axis=1),
-                use_initial_CF=init_CF
-            ).iloc[-1]
-            * 100
-        )
-        df.loc[end_idx, "Time Weighted Return (%)"] = (
-            calc.time_weighted_total_return(
-                val.sum(axis=1), cash_flows.sum(axis=1), div_tot.sum(axis=1),
-                date=None, use_initial_CF=init_CF
-            )
-            .iloc[-1]
-            .values
-            * 100
-        )
-        df.loc[end_idx, "Annualised Time Weighted Return (%)"] = (
-            calc.time_weighted_total_return_annualised(
-                val.sum(axis=1), cash_flows.sum(axis=1), div_tot.sum(axis=1),
-                use_initial_CF=init_CF
-            )
-            .iloc[-1]
-            .values
-            * 100
-        )
-    df.loc[len(df.index)] = np.nan  # blank row
+        total_ret_s = calc.basic_total_return(total_val, total_cf, total_div, use_initial_CF=init_CF)
+        ann_ret_s = calc.basic_total_return_annualised(total_val, total_cf, total_div, use_initial_CF=init_CF)
+        twr_s = calc.time_weighted_total_return(total_val, total_cf, total_div, use_initial_CF=init_CF)
+        ann_twr_s = calc.time_weighted_total_return_annualised(total_val, total_cf, total_div, use_initial_CF=init_CF)
+        dwr_s = _single_dwr_series(calc.dollar_weighted_total_return(total_val, total_cf, total_div, use_initial_CF=init_CF))
+
+    ann_dwr_s = _annualised_from_cumulative(dwr_s, total_val)
+
+    df.loc[end_idx, "Total Return (%)"] = _last_scalar(total_ret_s) * 100
+    df.loc[end_idx, "Ann. Return (%)"] = _last_scalar(ann_ret_s) * 100
+    df.loc[end_idx, "TWR (%)"] = _last_scalar(twr_s) * 100
+    df.loc[end_idx, "Ann. TWR (%)"] = _last_scalar(ann_twr_s) * 100
+    df.loc[end_idx, "DWR (%)"] = float(dwr_s.iloc[-1]) * 100
+    df.loc[end_idx, "Ann. DWR (%)"] = float(ann_dwr_s.iloc[-1]) * 100
+
+    df.loc[len(df.index)] = np.nan
     df.loc[len(df.index) - 1, "Company"] = ""
 
-    # BENCHMARK SUMMARY
     end_idx = len(df.index)
+    benchmark_cf = pd.Series(0, index=price[index].index, name=price[index].name)
     df.loc[end_idx, "Company"] = "BENCHMARK (" + index + ")"
-    df.loc[end_idx, "Daily Return (%)"] = (
-            calc.daily_pct_gain(price[index]).iloc[-1] * 100
-        )
-    
-    if calc_method == 'basic':   
-        df.loc[end_idx, "Total Return (%)"] = (
-            calc.basic_return(
-                price[index], 
-                pd.Series(0, index=price[index].index, name=price[index].name),
-            ).iloc[-1]
-            * 100
-        )
-        df.loc[end_idx, "Annualised Return (%)"] = (
-            calc.basic_return_annualised(
-                price[index], 
-                pd.Series(0, index=price[index].index, name=price[index].name),
-            ).iloc[-1]
-            * 100
-        )
+    df.loc[end_idx, "Daily Return (%)"] = calc.daily_pct_gain(price[index]).iloc[-1] * 100
+
+    if calc_method == "basic":
+        bench_total = calc.basic_return(price[index], benchmark_cf)
+        bench_ann = calc.basic_return_annualised(price[index], benchmark_cf)
+        bench_dwr = _single_dwr_series(calc.dollar_weighted_return(price[index], benchmark_cf))
     else:
-        df.loc[end_idx, "Total Return (%)"] = (
-            calc.basic_total_return(
-                price[index], 
-                pd.Series(0, index=price[index].index, name=price[index].name),
-                div[index]
-            ).iloc[-1]
-            * 100
-        )
-        df.loc[end_idx, "Annualised Return (%)"] = (
-            calc.basic_total_return_annualised(
-                price[index], 
-                pd.Series(0, index=price[index].index, name=price[index].name),
-                div[index]
-            ).iloc[-1]
-            * 100
-        )
-        
-    df.loc[end_idx, "Time Weighted Return (%)"] = df.loc[end_idx, "Total Return (%)"]
-    df.loc[end_idx, "Annualised Time Weighted Return (%)"] = df.loc[
-        end_idx, "Annualised Return (%)"]
-    
+        bench_total = calc.basic_total_return(price[index], benchmark_cf, div[index])
+        bench_ann = calc.basic_total_return_annualised(price[index], benchmark_cf, div[index])
+        bench_dwr = _single_dwr_series(calc.dollar_weighted_total_return(price[index], benchmark_cf, div[index]))
+
+    bench_ann_dwr = _annualised_from_cumulative(bench_dwr, price[index])
+    df.loc[end_idx, "Total Return (%)"] = _last_scalar(bench_total) * 100
+    df.loc[end_idx, "Ann. Return (%)"] = _last_scalar(bench_ann) * 100
+    df.loc[end_idx, "TWR (%)"] = df.loc[end_idx, "Total Return (%)"]
+    df.loc[end_idx, "Ann. TWR (%)"] = df.loc[end_idx, "Ann. Return (%)"]
+    df.loc[end_idx, "DWR (%)"] = float(bench_dwr.iloc[-1]) * 100
+    df.loc[end_idx, "Ann. DWR (%)"] = float(bench_ann_dwr.iloc[-1]) * 100
 
     if styles:
-        # DATAFRAME STYLES
-        # Set colormap using Seaborn palette
         cmap = sns.diverging_palette(20, 145, s=60, as_cmap=True)
+        pct_cols = ["Total Return (%)", "TWR (%)", "DWR (%)"]
+        ann_cols = ["Ann. Return (%)", "Ann. TWR (%)", "Ann. DWR (%)"]
 
         df = (
             df.style.format(
@@ -745,53 +682,19 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
                     "Current Value": "{:.2f}",
                     "Daily Return (%)": "{:.2f}",
                     "Total Return (%)": "{:.2f}",
-                    "Annualised Return (%)": "{:.2f}",
-                    "Time Weighted Return (%)": "{:.2f}",
-                    "Annualised Time Weighted Return (%)": "{:.2f}",
+                    "Ann. Return (%)": "{:.2f}",
+                    "TWR (%)": "{:.2f}",
+                    "Ann. TWR (%)": "{:.2f}",
+                    "DWR (%)": "{:.2f}",
+                    "Ann. DWR (%)": "{:.2f}",
                 },
             )
-            .background_gradient(
-                cmap=cmap,
-                vmin=-2,
-                vmax=2,
-                subset=(slice(len(df) - 3), "Daily Return (%)"),
-            )
-            .background_gradient(
-                cmap=cmap,
-                vmin=-100,
-                vmax=100,
-                subset=(
-                    slice(len(df) - 3),
-                    ["Total Return (%)", "Time Weighted Return (%)"],
-                ),
-            )
-            .background_gradient(
-                cmap=cmap,
-                vmin=-10,
-                vmax=10,
-                subset=(
-                    slice(len(df) - 3),
-                    ["Annualised Return (%)", "Annualised Time Weighted Return (%)"],
-                ),
-            )
-            .background_gradient(
-                cmap=cmap, vmin=-2, vmax=2, subset=(len(df) - 1, "Daily Return (%)")
-            )
-            .background_gradient(
-                cmap=cmap,
-                vmin=-100,
-                vmax=100,
-                subset=(len(df) - 1, ["Total Return (%)", "Time Weighted Return (%)"]),
-            )
-            .background_gradient(
-                cmap=cmap,
-                vmin=-10,
-                vmax=10,
-                subset=(
-                    len(df) - 1,
-                    ["Annualised Return (%)", "Annualised Time Weighted Return (%)"],
-                ),
-            )
+            .background_gradient(cmap=cmap, vmin=-2, vmax=2, subset=(slice(len(df) - 3), "Daily Return (%)"))
+            .background_gradient(cmap=cmap, vmin=-100, vmax=100, subset=(slice(len(df) - 3), pct_cols))
+            .background_gradient(cmap=cmap, vmin=-10, vmax=10, subset=(slice(len(df) - 3), ann_cols))
+            .background_gradient(cmap=cmap, vmin=-2, vmax=2, subset=(len(df) - 1, "Daily Return (%)"))
+            .background_gradient(cmap=cmap, vmin=-100, vmax=100, subset=(len(df) - 1, pct_cols))
+            .background_gradient(cmap=cmap, vmin=-10, vmax=10, subset=(len(df) - 1, ann_cols))
         )
 
     return df
