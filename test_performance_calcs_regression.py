@@ -79,6 +79,27 @@ class PerformanceCalcRegressionTests(unittest.TestCase):
         self.assertEqual(src.count("irr_series = irr_series.resample"), 1)
         self.assertEqual(src.count("vcol_ = vcol.resample"), 1)
 
+    def test_dollar_weighted_return_accepts_weekly_frequency(self) -> None:
+        idx = pd.date_range("2024-01-01", periods=520, freq="B")
+        val = pd.Series(np.linspace(100.0, 160.0, len(idx)), index=idx, name="portfolio")
+        cash_flows = pd.Series(0.0, index=idx, name="portfolio")
+        cash_flows.iloc[0] = 100.0
+
+        result = calc.dollar_weighted_return(val, cash_flows, resample_freq="W")
+        self.assertFalse(result.empty)
+
+    def test_dollar_weighted_total_return_accepts_weekly_frequency(self) -> None:
+        idx = pd.date_range("2024-01-01", periods=520, freq="B")
+        val = pd.Series(np.linspace(100.0, 160.0, len(idx)), index=idx, name="portfolio")
+        cash_flows = pd.Series(0.0, index=idx, name="portfolio")
+        cash_flows.iloc[0] = 100.0
+        div = pd.Series(0.0, index=idx, name="portfolio")
+
+        result = calc.dollar_weighted_total_return(
+            val, cash_flows, div, resample_freq="W"
+        )
+        self.assertFalse(result.empty)
+
 
 if __name__ == "__main__":
     unittest.main()

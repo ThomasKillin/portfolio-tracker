@@ -147,6 +147,7 @@ def display_readme():
     st.markdown('**Shares:** Number of shares bought or sold (negative number = sold)')
     st.markdown('**Date:** Date in DD/MM/YYYY format')
     st.markdown('**Price:** Price paid/received per share.')
+    st.markdown('**Brokerage:** (Optional) Transaction fee. Included in cost base and cash-flow calculations.')
     st.markdown('**Adjustments:** (Optional column) This column allow for a cost base adjustment to be made. Eg, if a company restructure takes place,') 
     st.markdown('a portion of the cost base may be split into a new entity. The number entered into the \'_Adjustments_\' column represents')
     st.markdown('the portion of the cost base that is to be removed. I.e, a value of `-0.1` indicates a 10% reduction in the cost base.')
@@ -247,7 +248,7 @@ def display_data():
                 st.plotly_chart(fig4)    
             with col2:    
                 st.plotly_chart(fig5)
-        
+
         display_calc_details()
             
     if 'portfolio' not in st.session_state: 

@@ -54,22 +54,16 @@ class ShareTrackingContractTests(unittest.TestCase):
         )
         portfolio = pd.DataFrame([[10, 100.0, 0.0]], index=idx, columns=cols)
 
-        class FakeTicker:
-            def __init__(self, symbol: str, session=None) -> None:  # noqa: ARG002
-                self.symbol = symbol
+        batch = pd.DataFrame(
+            {
+                ("AAA", "Close"): [101.0, 102.0],
+                ("AAA", "Dividends"): [0.0, 0.5],
+            },
+            index=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+        )
+        batch.columns = pd.MultiIndex.from_tuples(batch.columns)
 
-            def history(self, start=None, auto_adjust=False, **kwargs):  # noqa: ARG002
-                if self.symbol == "AAA":
-                    return pd.DataFrame(
-                        {
-                            "Close": [101.0, 102.0],
-                            "Dividends": [0.0, 0.5],
-                        },
-                        index=pd.to_datetime(["2024-01-02", "2024-01-03"]),
-                    )
-                raise RuntimeError("fetch failed")
-
-        with patch.object(share.yf, "Ticker", side_effect=lambda s, session=None: FakeTicker(s, session=session)):
+        with patch.object(share.yf, "download", return_value=batch):
             merged = share.merge_pricedata(portfolio, "IDX")
 
         self.assertIn(("$", "AAA"), merged.columns)

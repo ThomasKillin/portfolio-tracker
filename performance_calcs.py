@@ -679,18 +679,18 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
         elif num_rows <= 200 * 7:
             resample_freq = 'W-FRI'  # Business Weekly
         elif num_rows <= 200 * 30:
-            resample_freq = 'BM'  # Business Monthly
+            resample_freq = 'BME'  # Business Month End
         else:
-            resample_freq = 'BQ'  # Business Quarterly
+            resample_freq = 'BQE'  # Business Quarter End
     elif resample_freq not in ['W', 'M', 'Q']:
         raise ValueError("resample_freq must be 'auto', 'W', 'M', or 'Q'")  
     # convert to business days, etc
     elif resample_freq == 'W':
-        resample_freq = 'BW'
+        resample_freq = 'W-FRI'
     elif resample_freq == 'M':
-        resample_freq = 'BM'
+        resample_freq = 'BME'
     elif resample_freq == 'Q':
-        resample_freq = 'BQ'
+        resample_freq = 'BQE'
     
     DWR = pd.DataFrame([])
     for column in val:
@@ -839,18 +839,18 @@ def dollar_weighted_total_return(val, cash_flows, div, date=None, use_initial_CF
         elif num_rows <= 200 * 7:
             resample_freq = 'W-FRI'  # Business Weekly
         elif num_rows <= 200 * 30:
-            resample_freq = 'BM'  # Business Monthly
+            resample_freq = 'BME'  # Business Month End
         else:
-            resample_freq = 'BQ'  # Business Quarterly
+            resample_freq = 'BQE'  # Business Quarter End
     elif resample_freq not in ['W', 'M', 'Q']:
         raise ValueError("resample_freq must be 'auto', 'W', 'M', or 'Q'")  
     # convert to business days, etc
     elif resample_freq == 'W':
-        resample_freq = 'BW'
+        resample_freq = 'W-FRI'
     elif resample_freq == 'M':
-        resample_freq = 'BM'
+        resample_freq = 'BME'
     elif resample_freq == 'Q':
-        resample_freq = 'BQ'
+        resample_freq = 'BQE'
     
     DWR = pd.DataFrame([])
     for column in val:
