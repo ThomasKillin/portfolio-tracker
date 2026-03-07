@@ -243,6 +243,7 @@ def display_data():
                 "fig3": fig3,
                 "fig4": fig4,
                 "fig5": fig5,
+                "scope_figs": {},
             }
             st.session_state["render_cache_key"] = render_key
 
@@ -251,6 +252,7 @@ def display_data():
         cash_flows = cache["cash_flows"]
         price = cache["price"]
         div = cache["div"]
+        div_ = cache["div_"]
         fig1 = cache["fig1"]
         fig2 = cache["fig2"]
         fig3 = cache["fig3"]
@@ -262,16 +264,74 @@ def display_data():
         tab1, tab2, tab3, tab4 = st.tabs(['Portfolio Returns', 'Stock Returns', 'Stock details', 'Dividend Metrics'])    
         
         with tab1:
-            tab_a, tab_b = st.tabs(['Price Return', 'Total Return'])
-            with tab_a:
-                
-                st.plotly_chart(fig1)
-                #col1, col2, _ = st.columns([0.6, 3, 0.6])    
-                st.dataframe(summary_basic, use_container_width=True)  
-            with tab_b:
-                
-                st.plotly_chart(fig2)    
-                st.dataframe(summary_total, use_container_width=True) 
+            chart_scope_options = ["TOTAL"] + sorted(list(val.columns))
+            if (
+                "portfolio_chart_scope" in st.session_state
+                and st.session_state["portfolio_chart_scope"] not in chart_scope_options
+            ):
+                st.session_state["portfolio_chart_scope"] = "TOTAL"
+            chart_scope = st.selectbox(
+                "Chart scope",
+                options=chart_scope_options,
+                index=0,
+                key="portfolio_chart_scope",
+                help="Select TOTAL portfolio or an individual stock for the return chart.",
+            )
+
+            show_total_return = st.toggle(
+                "Total Return View",
+                value=False,
+                help="Off = Price Return, On = Total Return (includes dividends).",
+            )
+
+            if chart_scope == "TOTAL":
+                scope_fig_basic = fig1
+                scope_fig_total = fig2
+            else:
+                scope_key = (chart_scope, str(st.session_state['start_date']), index)
+                scope_figs = cache.get("scope_figs", {})
+                if scope_key not in scope_figs:
+                    val_scope = val[[chart_scope]]
+                    cf_scope = cash_flows[[chart_scope]]
+                    div_scope = div[[chart_scope]] if chart_scope in div.columns else pd.DataFrame(
+                        {chart_scope: 0.0}, index=val_scope.index
+                    )
+                    benchmark_price = (
+                        price[index] if index in price.columns else pd.Series(1.0, index=price.index, name=index)
+                    )
+                    benchmark_div = (
+                        div_[index] if index in div_.columns else pd.Series(0.0, index=price.index, name=index)
+                    )
+                    scope_figs[scope_key] = {
+                        "basic": graph.plot_portfolio_gain_plotly(
+                            val_scope,
+                            cf_scope,
+                            benchmark_price,
+                            div=div_scope,
+                            index_div=benchmark_div,
+                            date=st.session_state['start_date'],
+                            calc_method='basic',
+                        ),
+                        "total": graph.plot_portfolio_gain_plotly(
+                            val_scope,
+                            cf_scope,
+                            benchmark_price,
+                            div=div_scope,
+                            index_div=benchmark_div,
+                            date=st.session_state['start_date'],
+                            calc_method='total',
+                        ),
+                    }
+                    cache["scope_figs"] = scope_figs
+                scope_fig_basic = scope_figs[scope_key]["basic"]
+                scope_fig_total = scope_figs[scope_key]["total"]
+
+            if show_total_return:
+                st.plotly_chart(scope_fig_total)
+                st.dataframe(summary_total, use_container_width=True)
+            else:
+                st.plotly_chart(scope_fig_basic)
+                st.dataframe(summary_basic, use_container_width=True)
         
         with tab2:
             st.plotly_chart(fig3)

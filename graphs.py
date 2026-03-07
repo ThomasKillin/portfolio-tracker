@@ -140,18 +140,43 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
     init_CF = (val.shape == val[date:].shape)
     
     colors = px.colors.sequential.Aggrnyl
+
+    def _as_series(obj):
+        if isinstance(obj, pd.Series):
+            return obj
+        if isinstance(obj, pd.DataFrame):
+            if obj.empty:
+                return pd.Series(dtype=float)
+            return obj.iloc[:, 0]
+        return pd.Series(obj)
     
     def calculate_returns(calc_method):
         if calc_method == 'basic':
-            y1 = calc.basic_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
-            y2 = (calc.time_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100)[0]
-            y3 = calc.basic_return(index_price, pd.Series(0, index=index_price.index), date=date) * 100
-            y4 = calc.dollar_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
+            y1 = _as_series(
+                calc.basic_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF)
+            ) * 100
+            y2 = _as_series(
+                calc.time_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF)
+            ) * 100
+            y3 = _as_series(
+                calc.basic_return(index_price, pd.Series(0, index=index_price.index), date=date)
+            ) * 100
+            y4 = _as_series(
+                calc.dollar_weighted_return(val.sum(axis=1), cash_flows.sum(axis=1), date=date, use_initial_CF=init_CF)
+            ) * 100
         elif calc_method == 'total':
-            y1 = calc.basic_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
-            y2 = (calc.time_weighted_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100)[0]
-            y3 = calc.basic_total_return(index_price, pd.Series(0, index=index_price.index), index_div, date=date) * 100                    
-            y4 = calc.dollar_weighted_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF) * 100
+            y1 = _as_series(
+                calc.basic_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF)
+            ) * 100
+            y2 = _as_series(
+                calc.time_weighted_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF)
+            ) * 100
+            y3 = _as_series(
+                calc.basic_total_return(index_price, pd.Series(0, index=index_price.index), index_div, date=date)
+            ) * 100
+            y4 = _as_series(
+                calc.dollar_weighted_total_return(val.sum(axis=1), cash_flows.sum(axis=1), div.sum(axis=1), date=date, use_initial_CF=init_CF)
+            ) * 100
         return y1, y2, y3, y4
     
     y1, y2, y3, y4 = calculate_returns(calc_method)
@@ -172,29 +197,29 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
                         subplot_titles=plot_titles)
     
     # Plot portfolio gain
-    fig.add_trace(go.Scatter(x=val[date:].index,
-                             y=y1.values.tolist(),
+    fig.add_trace(go.Scatter(x=y1.index,
+                             y=y1.values,
                              name="Basic Return",
                              legendgroup='group1',
                              legend='legend',
                              mode='lines', line=dict(color=colors[0])), row=1, col=1)
     
-    fig.add_trace(go.Scatter(x=val[date:].index,
-                             y=y2.values.tolist(),
+    fig.add_trace(go.Scatter(x=y2.index,
+                             y=y2.values,
                              name="Time Weighted Return",
                              legendgroup='group2',
                              legend='legend',
                              line=dict(color=colors[3])), row=1, col=1)
     
-    fig.add_trace(go.Scatter(x=index_price[date:].index,
-                             y=y3.values.tolist(),
+    fig.add_trace(go.Scatter(x=y3.index,
+                             y=y3.values,
                              name="Benchmark Index",
                              legendgroup='group3',
                              legend='legend',
                              line=dict(color=colors[5])), row=1, col=1)
     
     fig.add_trace(go.Scatter(x=y4.index,
-                             y=y4.values.flatten(),
+                             y=y4.values,
                              name="Dollar weighted return",
                              legendgroup='group4',
                              legend='legend',

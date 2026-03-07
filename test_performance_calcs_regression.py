@@ -100,6 +100,25 @@ class PerformanceCalcRegressionTests(unittest.TestCase):
         )
         self.assertFalse(result.empty)
 
+    def test_dollar_weighted_endpoint_matches_full_last_value(self) -> None:
+        idx = pd.date_range("2024-01-01", periods=260, freq="B")
+        val = pd.DataFrame({"A": np.linspace(100.0, 180.0, len(idx))}, index=idx)
+        cash_flows = pd.DataFrame({"A": np.zeros(len(idx))}, index=idx)
+        cash_flows.iloc[0, 0] = 100.0
+
+        full = calc.dollar_weighted_return(val, cash_flows, resample_freq="M")
+        endpoint = calc.dollar_weighted_return_endpoint(val, cash_flows, resample_freq="M")
+        self.assertAlmostEqual(float(full.iloc[-1, 0]), float(endpoint["A"]), places=10)
+
+    def test_auto_resample_considers_dataframe_width(self) -> None:
+        idx = pd.date_range("2024-01-01", periods=50, freq="B")
+        wide = pd.DataFrame(
+            np.ones((len(idx), 10)),
+            index=idx,
+            columns=[f"S{i}" for i in range(10)],
+        )
+        self.assertEqual(calc._resolve_dwr_resample_freq(wide, "auto", base_rows=100), "W-FRI")
+
 
 if __name__ == "__main__":
     unittest.main()
