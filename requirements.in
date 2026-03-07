@@ -1,0 +1,13 @@
+python-dotenv>=1,<2
+pandas>=2,<3
+numpy>=2,<3
+numpy-financial>=1,<2
+yfinance>=1,<2
+streamlit>=1,<2
+requests>=2,<3
+finnhub-python>=2,<4
+seaborn>=0.13,<1
+matplotlib>=3,<4
+plotly>=5,<7
+scipy>=1,<2
+contourpy>=1,<2
