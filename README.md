@@ -42,6 +42,20 @@ Currently:
 
 ## 1. Installation
 
+### Python Runtime
+
+Primary supported runtime is **Python 3.12**.
+
+Recommended environment setup:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip check
+```
+
 ### Option 1: Streamlit App
 
 https://thomaskillin-portfolio-tracker-streamlit-vw6fag.streamlit.app/
@@ -86,6 +100,41 @@ the portion of the cost base that is to be removed. I.e, a value of `-0.1` indic
 ## 3. Dependencies
 
 [Portfolio tracker requirements](https://github.com/ThomasKillin/portfolio-tracker/blob/main/requirements.txt)
+
+Dependency workflow:
+- `requirements.in`: direct dependency declarations + compatibility guardrails
+- `requirements.txt`: fully pinned transitive lock generated from `requirements.in`
+
+PowerShell helper tasks:
+
+```powershell
+# install tooling + pinned deps
+./scripts/deps.ps1 -Task install
+
+# recompile lock file from requirements.in
+./scripts/deps.ps1 -Task compile
+
+# sync env exactly to requirements.txt
+./scripts/deps.ps1 -Task sync
+
+# validation checks
+./scripts/deps.ps1 -Task check
+```
+
+Validation command sequence:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pip check
+python -m unittest -q
+python -m py_compile streamlit.py share_tracking.py graphs.py performance_calcs.py
+```
+
+Troubleshooting:
+- If `pip check` reports conflicts, recreate the virtual environment and reinstall from `requirements.txt`.
+- If Streamlit import issues occur from module shadowing, launch using Streamlit CLI executable:
+  - `streamlit run streamlit.py`
+- If ASX history depth is lower than expected for ETFs, validate listing age (`STW.AX`, `VAS.AX` are <20y listings).
 
 ## 4. Metrics
 
