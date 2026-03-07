@@ -674,11 +674,11 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
     # Determine resampling frequency
     if resample_freq == 'auto':
         num_rows = len(val)
-        if num_rows <= 200:
+        if num_rows <= 100:
             resample_freq = 'B'  # Business Daily, no resampling needed
-        elif num_rows <= 200 * 7:
+        elif num_rows <= 100 * 7:
             resample_freq = 'W-FRI'  # Business Weekly
-        elif num_rows <= 200 * 30:
+        elif num_rows <= 100 * 30:
             resample_freq = 'BME'  # Business Month End
         else:
             resample_freq = 'BQE'  # Business Quarter End
@@ -705,7 +705,7 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
             vcol = vcol.loc[start_index:]        
             ccol = ccol.loc[start_index:]    
 
-            irr_series = -ccol    
+            irr_series = (-ccol).astype(float)
 
             # Only use the val column for initial val/cost base if use_initial_CF == False
             # and the first row is non-zero (i.e. there are no holdings at the start date)
@@ -870,7 +870,7 @@ def dollar_weighted_total_return(val, cash_flows, div, date=None, use_initial_CF
             ccol = ccol.loc[start_index:]    
             dcol = dcol.loc[start_index:]    
 
-            irr_series = -ccol + dcol    
+            irr_series = (-ccol + dcol).astype(float)
 
             # Only use the val column for initial val/cost base if use_initial_CF == False
             # and the first row is non-zero (i.e. there are no holdings at the start date)

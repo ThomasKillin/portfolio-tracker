@@ -7,6 +7,7 @@ import data_provider as dp
 import warnings
 import re
 from collections import defaultdict
+import seaborn as sns
 
 # Basic webpage setup
 st.set_page_config(
@@ -111,26 +112,26 @@ def process_data(merged_portfolio, target_currency):
         st.warning(msg)
 
     st.session_state['portfolio'] = portfolio
+    st.session_state["portfolio_version"] = st.session_state.get("portfolio_version", 0) + 1
+    st.session_state.pop("render_cache", None)
+    st.session_state.pop("render_cache_key", None)
     return True
 
 
 def display_calc_details():
     with st.expander(":question: Calculation  \ndetails", expanded=False):
         st.markdown('Some of the following metrics are used to characterise the portfolio:')
-        st.markdown('1. **Price Return**')
-        st.markdown('Price return is the % return based on share price appreciation only')
-        st.markdown('1. **Total Return**')
-        st.markdown('Total return includes share price appreciation plus dividend income')
-        st.markdown('3. **Basic return**')
-        st.markdown('The basic rate of return takes the gain for the portfolio and divides by the (original) investment amount')
-        st.markdown('Cash flows are taken into account by assuming they occurred at the beginning of the investment period')
-        st.markdown('4. **Time-weighted-return**')
-        st.markdown('A time-weighted return attempts to minimize or altogether remove the effects of interim cash flows.')
-        st.markdown('Cash flows are weighted according to the amount of time they have been part of the portfolio')
-        st.markdown('5. **Annualised returns**')
-        st.markdown('An annualized total return is the geometric average amount of money earned by an investment each')
-        st.markdown('year over a given time period. The annualized return formula is calculated as a geometric average')
-        st.markdown('to show what an investor would earn over a period of time if the annual return was compounded.')
+        st.markdown('1. **Price Return**: % return from share price changes only.')
+        st.markdown('2. **Total Return**: includes share price changes plus dividends.')
+        st.markdown('3. **Basic Return**: gain divided by invested capital, with interim cash flows treated as if invested from period start.')
+        st.markdown('4. **TWR (%)**: time-weighted return, designed to reduce the impact of cash-flow timing.')
+        st.markdown('5. **DWR (%)**: dollar-weighted return (IRR-style), reflects the timing and size of invested dollars.')
+        st.markdown('6. **Ann.** columns: annualized equivalents of the corresponding return measures.')
+        st.markdown('7. **Dividend Metrics tab**:')
+        st.markdown('Cumulative Dividends = running total dividend cash received.')
+        st.markdown('Trailing 12M Dividends = dividend cash received over the last 12 months.')
+        st.markdown('TTM Yield on Cost (%) = trailing-12M dividends / cumulative buy cash flows.')
+        st.markdown('Lifetime Div/Cost (%) = cumulative dividends / cumulative buy cash flows.')
         st.markdown('\nhttps://www.kitces.com/blog/twr-dwr-irr-calculations-performance-reporting-software-methodology-gips-compliance/')
 
 def display_readme():
@@ -172,60 +173,93 @@ def display_data():
                                         value = st.session_state['portfolio'].index[0],
                                         on_change=display_data)
             st.session_state['start_date'] = start_date
-        
-        # Extract variables for performance calculations
-        val, cash_flows, price, accum, shares, div, div_ = share.extract_parameters(st.session_state['portfolio'])
-    
-        summary_basic = share.stock_summary(st.session_state['portfolio'], index, 
-                                      date=st.session_state['start_date'],
-                                      calc_method='basic')   
-        
-        summary_total = share.stock_summary(st.session_state['portfolio'], index, 
-                                      date=st.session_state['start_date'],
-                                      calc_method='total')   
-        
-        
-        
-        #if 'calc_option' not in st.session_state:
-        #    st.session_state['calc_option'] = "Basic return"
-        
-        #calc_option = st.radio(
-        #    "Select calculation method",
-        #    ["Basic return", 
-        #     "Total return"],
-        #    index=["Basic return", "Total return"].index(st.session_state['calc_option']),
-        #    captions = ["Return based on share price change only", 
-        #                "Return including share price change plus dividend income"])
 
-        #st.session_state['calc_option'] = calc_option
+        portfolio_version = st.session_state.get("portfolio_version", 0)
+        render_key = (
+            portfolio_version,
+            str(st.session_state['start_date']),
+            index,
+        )
+        if st.session_state.get("render_cache_key") != render_key:
+            # Extract variables for performance calculations
+            val, cash_flows, price, accum, shares, div, div_ = share.extract_parameters(st.session_state['portfolio'])
+            benchmark_available = index in price.columns
+            benchmark_price = price[index] if benchmark_available else pd.Series(1.0, index=price.index, name=index)
+            benchmark_div = div_[index] if benchmark_available and index in div_.columns else pd.Series(0.0, index=price.index, name=index)
+
+            if not benchmark_available:
+                st.warning(
+                    f"Benchmark ticker '{index}' was not found in downloaded price data. "
+                    "Benchmark comparisons are temporarily disabled for this render."
+                )
+
+            summary_basic = share.stock_summary(
+                st.session_state['portfolio'],
+                index,
+                date=st.session_state['start_date'],
+                calc_method='basic',
+            )
+            summary_total = share.stock_summary(
+                st.session_state['portfolio'],
+                index,
+                date=st.session_state['start_date'],
+                calc_method='total',
+            )
+
+            fig1 = graph.plot_portfolio_gain_plotly(
+                val, cash_flows, benchmark_price,
+                div=div, index_div=benchmark_div,
+                date=st.session_state['start_date'],
+                calc_method='basic',
+            )
+            fig2 = graph.plot_portfolio_gain_plotly(
+                val, cash_flows, benchmark_price,
+                div=div, index_div=benchmark_div,
+                date=st.session_state['start_date'],
+                calc_method='total',
+            )
+            fig3 = graph.plot_stock_gain_plotly(
+                val, cash_flows, date=st.session_state['start_date']
+            )
+            fig4 = graph.plot_stock_holdings_plotly(
+                val, date=st.session_state['start_date']
+            )
+            fig5 = graph.plot_annualised_return_plotly_(
+                val, cash_flows, benchmark_price, date=st.session_state['start_date']
+            )
+
+            st.session_state["render_cache"] = {
+                "val": val,
+                "cash_flows": cash_flows,
+                "price": price,
+                "accum": accum,
+                "shares": shares,
+                "div": div,
+                "div_": div_,
+                "summary_basic": summary_basic,
+                "summary_total": summary_total,
+                "fig1": fig1,
+                "fig2": fig2,
+                "fig3": fig3,
+                "fig4": fig4,
+                "fig5": fig5,
+            }
+            st.session_state["render_cache_key"] = render_key
+
+        cache = st.session_state["render_cache"]
+        val = cache["val"]
+        cash_flows = cache["cash_flows"]
+        price = cache["price"]
+        div = cache["div"]
+        fig1 = cache["fig1"]
+        fig2 = cache["fig2"]
+        fig3 = cache["fig3"]
+        fig4 = cache["fig4"]
+        fig5 = cache["fig5"]
+        summary_basic = cache["summary_basic"]
+        summary_total = cache["summary_total"]
         
-        #if calc_option == "Basic return":
-        #    st.session_state['calc_method'] = 'basic'
-        #    st.session_state['div'] = None
-        #else:
-        #    st.session_state['calc_method'] = 'total'
-        #    st.session_state['div'] = div 
-        #    st.session_state['portfolio'] = st.session_state['portfolio'] 
-        
-        # Generate figures
-        fig1 = graph.plot_portfolio_gain_plotly(val, cash_flows, price[index],
-                                                div=div,
-                                                index_div=div_[index],
-                                                date=st.session_state['start_date'],
-                                                calc_method='basic')
-        fig2 = graph.plot_portfolio_gain_plotly(val, cash_flows, price[index],
-                                                div=div,
-                                                index_div=div_[index],
-                                                date=st.session_state['start_date'],
-                                                calc_method='total')
-        fig3 = graph.plot_stock_gain_plotly(val, cash_flows,
-                                            date=st.session_state['start_date'])
-        fig4 = graph.plot_stock_holdings_plotly(val, 
-                                                date=st.session_state['start_date'])
-        fig5 = graph.plot_annualised_return_plotly_(val, cash_flows, price[index], 
-                                                    date=st.session_state['start_date'])
-        
-        tab1, tab2, tab3 = st.tabs(['Portfolio Returns', 'Stock Returns', 'Stock details'])    
+        tab1, tab2, tab3, tab4 = st.tabs(['Portfolio Returns', 'Stock Returns', 'Stock details', 'Dividend Metrics'])    
         
         with tab1:
             tab_a, tab_b = st.tabs(['Price Return', 'Total Return'])
@@ -248,6 +282,95 @@ def display_data():
                 st.plotly_chart(fig4)    
             with col2:    
                 st.plotly_chart(fig5)
+
+        with tab4:
+            div_cash = div.loc[st.session_state['start_date']:].fillna(0)
+            cf_sel = cash_flows.loc[st.session_state['start_date']:].fillna(0)
+            cum_div = div_cash.cumsum()
+
+            if div_cash.empty:
+                st.info("No dividend data available for the selected period.")
+            else:
+                col_cum_div = "Cumulative Dividends ($)"
+                col_ttm_div = "Trailing 12M Dividends ($)"
+                col_ttm_yoc = "TTM Yield on Cost (%)"
+                col_life_yoc = "Lifetime Div/Cost (%)"
+
+                ttm_cutoff = div_cash.index.max() - pd.Timedelta(days=365)
+                ttm_div = div_cash.loc[ttm_cutoff:].sum()
+                invested = cf_sel.clip(lower=0).sum()
+                yield_on_cost_ttm = (ttm_div / invested.replace(0, pd.NA) * 100).fillna(0)
+                lifetime_div_to_cost = (
+                    cum_div.iloc[-1] / invested.replace(0, pd.NA) * 100
+                ).fillna(0)
+
+                div_summary = pd.DataFrame(
+                    {
+                        col_cum_div: cum_div.iloc[-1],
+                        col_ttm_div: ttm_div,
+                        col_ttm_yoc: yield_on_cost_ttm,
+                        col_life_yoc: lifetime_div_to_cost,
+                    }
+                ).sort_index()
+                div_summary.loc["TOTAL"] = [
+                    div_summary[col_cum_div].sum(),
+                    div_summary[col_ttm_div].sum(),
+                    (ttm_div.sum() / max(invested.sum(), 1e-9)) * 100,
+                    (cum_div.iloc[-1].sum() / max(invested.sum(), 1e-9)) * 100,
+                ]
+
+                styled_div_summary = (
+                    div_summary.style.format(
+                        {
+                            col_cum_div: "{:.2f}",
+                            col_ttm_div: "{:.2f}",
+                            col_ttm_yoc: "{:.2f}",
+                            col_life_yoc: "{:.2f}",
+                        }
+                    )
+                    .background_gradient(
+                        cmap=sns.diverging_palette(20, 145, s=60, as_cmap=True),
+                        vmin=-10,
+                        vmax=10,
+                        subset=[
+                            col_ttm_yoc,
+                            col_life_yoc,
+                        ],
+                    )
+                )
+                st.dataframe(styled_div_summary, use_container_width=True)
+
+                div_options = ["TOTAL"] + sorted(list(div_cash.columns))
+                if (
+                    "div_chart_scope" in st.session_state
+                    and st.session_state["div_chart_scope"] not in div_options
+                ):
+                    st.session_state["div_chart_scope"] = "TOTAL"
+                div_selection = st.selectbox(
+                    "Dividend chart scope",
+                    options=div_options,
+                    index=0,
+                    key="div_chart_scope",
+                )
+
+                try:
+                    fig_div_cum, fig_div_annual = graph.plot_dividend_metrics_plotly(
+                        div_cash, selection=div_selection
+                    )
+                except Exception as exc:
+                    st.error(
+                        f"Dividend chart render failed for selection '{div_selection}': "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    fig_div_cum, fig_div_annual = graph.plot_dividend_metrics_plotly(
+                        div_cash, selection="TOTAL"
+                    )
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.plotly_chart(fig_div_cum, use_container_width=True)
+                with c2:
+                    st.plotly_chart(fig_div_annual, use_container_width=True)
 
         display_calc_details()
             
@@ -327,13 +450,13 @@ with st.sidebar:
                 button = None
  
                      
-# If button then extract the data
+# If button clicked, refresh market data into session state.
 if button:
     merged_portfolio = get_data(file=file, index=index)
-    if process_data(merged_portfolio=merged_portfolio, target_currency=base_currency):
-        display_data()
-        
-# Show a readme if portfolio not extracted
-if 'portfolio' not in st.session_state: 
-    
+    process_data(merged_portfolio=merged_portfolio, target_currency=base_currency)
+
+# Always render portfolio view when already loaded in session state.
+if 'portfolio' in st.session_state:
+    display_data()
+else:
     display_readme()
