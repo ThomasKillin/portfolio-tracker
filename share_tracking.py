@@ -572,15 +572,20 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
 
     df = pd.DataFrame()
     df.index.name = "Company"
+    benchmark_available = index in price.columns
 
     avg_price = calc.average_price(cash_flows_full, shares_full).ffill().reindex(val.index).ffill().fillna(0)
     df["Average Price"] = avg_price.iloc[-1]
     df["Current Price"] = price.iloc[-1]
     df["Current Holdings"] = accum.iloc[-1]
     df["Current Value"] = val.iloc[-1]
-    df["Daily Return (%)"] = (
-        calc.daily_pct_gain(price_all.drop(labels=index, axis=1)).ffill().iloc[-1] * 100
-    )
+    daily_base = calc.daily_pct_gain(price_all.drop(labels=index, axis=1, errors="ignore")).ffill()
+    if isinstance(daily_base, pd.DataFrame) and not daily_base.empty:
+        df["Daily Return (%)"] = daily_base.iloc[-1] * 100
+    elif isinstance(daily_base, pd.Series) and not daily_base.empty:
+        df["Daily Return (%)"] = daily_base.iloc[-1] * 100
+    else:
+        df["Daily Return (%)"] = 0.0
     df.loc[df["Current Holdings"] == 0, "Daily Return (%)"] = 0
 
     if calc_method == "basic":
@@ -645,27 +650,28 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
     df.loc[len(df.index)] = np.nan
     df.loc[len(df.index) - 1, "Company"] = ""
 
-    end_idx = len(df.index)
-    benchmark_cf = pd.Series(0, index=price[index].index, name=price[index].name)
-    df.loc[end_idx, "Company"] = "BENCHMARK (" + index + ")"
-    df.loc[end_idx, "Daily Return (%)"] = calc.daily_pct_gain(price[index]).iloc[-1] * 100
+    if benchmark_available:
+        end_idx = len(df.index)
+        benchmark_cf = pd.Series(0, index=price[index].index, name=price[index].name)
+        df.loc[end_idx, "Company"] = "BENCHMARK (" + index + ")"
+        df.loc[end_idx, "Daily Return (%)"] = calc.daily_pct_gain(price[index]).iloc[-1] * 100
 
-    if calc_method == "basic":
-        bench_total = calc.basic_return(price[index], benchmark_cf)
-        bench_ann = calc.basic_return_annualised(price[index], benchmark_cf)
-        bench_dwr = _single_dwr_series(calc.dollar_weighted_return(price[index], benchmark_cf))
-    else:
-        bench_total = calc.basic_total_return(price[index], benchmark_cf, div[index])
-        bench_ann = calc.basic_total_return_annualised(price[index], benchmark_cf, div[index])
-        bench_dwr = _single_dwr_series(calc.dollar_weighted_total_return(price[index], benchmark_cf, div[index]))
+        if calc_method == "basic":
+            bench_total = calc.basic_return(price[index], benchmark_cf)
+            bench_ann = calc.basic_return_annualised(price[index], benchmark_cf)
+            bench_dwr = _single_dwr_series(calc.dollar_weighted_return(price[index], benchmark_cf))
+        else:
+            bench_total = calc.basic_total_return(price[index], benchmark_cf, div[index])
+            bench_ann = calc.basic_total_return_annualised(price[index], benchmark_cf, div[index])
+            bench_dwr = _single_dwr_series(calc.dollar_weighted_total_return(price[index], benchmark_cf, div[index]))
 
-    bench_ann_dwr = _annualised_from_cumulative(bench_dwr, price[index])
-    df.loc[end_idx, "Total Return (%)"] = _last_scalar(bench_total) * 100
-    df.loc[end_idx, "Ann. Return (%)"] = _last_scalar(bench_ann) * 100
-    df.loc[end_idx, "TWR (%)"] = df.loc[end_idx, "Total Return (%)"]
-    df.loc[end_idx, "Ann. TWR (%)"] = df.loc[end_idx, "Ann. Return (%)"]
-    df.loc[end_idx, "DWR (%)"] = float(bench_dwr.iloc[-1]) * 100
-    df.loc[end_idx, "Ann. DWR (%)"] = float(bench_ann_dwr.iloc[-1]) * 100
+        bench_ann_dwr = _annualised_from_cumulative(bench_dwr, price[index])
+        df.loc[end_idx, "Total Return (%)"] = _last_scalar(bench_total) * 100
+        df.loc[end_idx, "Ann. Return (%)"] = _last_scalar(bench_ann) * 100
+        df.loc[end_idx, "TWR (%)"] = df.loc[end_idx, "Total Return (%)"]
+        df.loc[end_idx, "Ann. TWR (%)"] = df.loc[end_idx, "Ann. Return (%)"]
+        df.loc[end_idx, "DWR (%)"] = float(bench_dwr.iloc[-1]) * 100
+        df.loc[end_idx, "Ann. DWR (%)"] = float(bench_ann_dwr.iloc[-1]) * 100
 
     if styles:
         cmap = sns.diverging_palette(20, 145, s=60, as_cmap=True)

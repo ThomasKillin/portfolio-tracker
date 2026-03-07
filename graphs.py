@@ -159,9 +159,13 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
     if calc_method == 'basic':
         plot_titles = ("<b>Price return", "<b>Total Portfolio Value")
         portfolio_val = val.sum(axis=1) / 1000
+        price_only_val = portfolio_val
+        div_only_val = pd.Series(0, index=val.index)
     else:
         plot_titles = ("<b>Total Shareholder Return", "<b>Total Portfolio Value + accumulated dividends ")
-        portfolio_val = (val.sum(axis=1) + div.cumsum().sum(axis=1)) / 1000
+        price_only_val = val.sum(axis=1) / 1000
+        div_only_val = div.cumsum().sum(axis=1) / 1000
+        portfolio_val = price_only_val + div_only_val
     # Create subplot for portfolio gain vs. time
     fig = make_subplots(rows=1, cols=2, 
                         column_widths=[1, 1],
@@ -172,24 +176,28 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
                              y=y1.values.tolist(),
                              name="Basic Return",
                              legendgroup='group1',
+                             legend='legend',
                              mode='lines', line=dict(color=colors[0])), row=1, col=1)
     
     fig.add_trace(go.Scatter(x=val[date:].index,
                              y=y2.values.tolist(),
                              name="Time Weighted Return",
                              legendgroup='group2',
+                             legend='legend',
                              line=dict(color=colors[3])), row=1, col=1)
     
     fig.add_trace(go.Scatter(x=index_price[date:].index,
                              y=y3.values.tolist(),
                              name="Benchmark Index",
                              legendgroup='group3',
+                             legend='legend',
                              line=dict(color=colors[5])), row=1, col=1)
     
     fig.add_trace(go.Scatter(x=y4.index,
                              y=y4.values.flatten(),
                              name="Dollar weighted return",
                              legendgroup='group4',
+                             legend='legend',
                              line=dict(color='darkgrey')), row=1, col=1)
 
     # Set layout for portfolio gain subplot
@@ -199,22 +207,55 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
     # Plot total portfolio value
     fig.add_trace(go.Scatter(x=val.index,
                              y=portfolio_val,  
-                             name="Total Portfolio Value",
-                             legendgroup='group2',
-                             showlegend=False,
+                             name="Total Value",
+                             legendgroup='group5',
+                             legend='legend2',
+                             showlegend=True,
                              line=dict(color='rgb(71, 157, 201)')), 
                              row=1, col=2)
+
+    if calc_method == 'total':
+        fig.add_trace(go.Scatter(x=val.index,
+                                 y=price_only_val,
+                                 name="Value (Price Only)",
+                                 legendgroup='group6',
+                                 legend='legend2',
+                                 line=dict(color='rgb(14, 116, 144)')),
+                                 row=1, col=2)
+        fig.add_trace(go.Scatter(x=val.index,
+                                 y=div_only_val,
+                                 name="Accumulated Dividends",
+                                 legendgroup='group7',
+                                 legend='legend2',
+                                 line=dict(color='rgb(107, 114, 128)')),
+                                 row=1, col=2)
 
     # Set layout for total portfolio value subplot
     fig.update_yaxes(title_text="Value (*$1000s)", row=1, col=2)
     fig.update_xaxes(title_text="Date", row=1, col=2)
     
-    fig.update_layout(showlegend=True,
-                      autosize=False,
-                      width=1400,
-                      height=550,
-                      xaxis=dict(showgrid=True),
-                      yaxis=dict(showgrid=True))
+    fig.update_layout(
+        showlegend=True,
+        autosize=False,
+        width=1400,
+        height=550,
+        xaxis=dict(showgrid=True),
+        yaxis=dict(showgrid=True),
+        legend=dict(
+            x=0.01,
+            y=0.99,
+            xanchor='left',
+            yanchor='top',
+            bgcolor='rgba(255,255,255,0.7)',
+        ),
+        legend2=dict(
+            x=0.99,
+            y=0.99,
+            xanchor='right',
+            yanchor='top',
+            bgcolor='rgba(255,255,255,0.7)',
+        ),
+    )
     
     fig['layout']['xaxis2'].update(showgrid=True)
     fig.update_annotations(font_size=20)
@@ -334,6 +375,64 @@ def plot_portfolio_gain_plotly_(val, cash_flows, index_price, date=None):
     #fig.update_traces(line=dict(color='#0099FF', width=2), marker=dict(size=4))
 
     return fig
+
+
+def plot_dividend_metrics_plotly(div_cash, selection="TOTAL"):
+    """
+    Build dividend-focused charts:
+    1) cumulative total dividends over time
+    2) annual total dividends
+    """
+    colors = px.colors.sequential.Aggrnyl
+    div_cash = div_cash.fillna(0)
+    if selection == "TOTAL":
+        series = div_cash.sum(axis=1)
+        title_suffix = " (Portfolio)"
+    else:
+        series = div_cash[selection] if selection in div_cash.columns else div_cash.sum(axis=1)
+        title_suffix = f" ({selection})"
+
+    cum_div_total = series.cumsum()
+    annual_div_total = series.resample("YE").sum()
+
+    fig_div_cum = go.Figure()
+    fig_div_cum.add_trace(
+        go.Scatter(
+            x=cum_div_total.index,
+            y=cum_div_total.values,
+            mode="lines",
+            name="Cumulative Dividends",
+            line=dict(color=colors[2], width=2),
+        )
+    )
+    fig_div_cum.update_layout(
+        title=f"<b>Cumulative Dividends{title_suffix}</b>",
+        xaxis_title="Date",
+        yaxis_title="Dividends ($)",
+        height=380,
+        xaxis=dict(showgrid=True),
+        yaxis=dict(showgrid=True),
+    )
+
+    fig_div_annual = go.Figure()
+    fig_div_annual.add_trace(
+        go.Bar(
+            x=annual_div_total.index.year.astype(str),
+            y=annual_div_total.values,
+            name="Annual Dividends",
+            marker_color=colors[4],
+        )
+    )
+    fig_div_annual.update_layout(
+        title=f"<b>Annual Dividends{title_suffix}</b>",
+        xaxis_title="Year",
+        yaxis_title="Dividends ($)",
+        height=380,
+        xaxis=dict(showgrid=True),
+        yaxis=dict(showgrid=True),
+    )
+
+    return fig_div_cum, fig_div_annual
 
 
     
