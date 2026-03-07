@@ -540,29 +540,6 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
     div_tot = div_tot_full.loc[date:].ffill()
     div = div_full.loc[date:].ffill()
 
-    def _annualised_from_cumulative(cum_ret, base_val):
-        years = calc._elapsed_years_from_first_nonzero(base_val).iloc[-1]
-        return (np.power(1 + cum_ret, 1 / years) - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
-
-    def _single_dwr_series(dwr_result):
-        if isinstance(dwr_result, pd.DataFrame):
-            if dwr_result.empty:
-                return pd.Series(dtype=float)
-            return dwr_result.iloc[:, 0]
-        return dwr_result
-
-    def _dwr_last_by_asset(dwr_result, asset_cols):
-        if isinstance(dwr_result, pd.DataFrame):
-            if dwr_result.empty:
-                return pd.Series(0.0, index=asset_cols)
-            last = dwr_result.iloc[-1]
-            if len(last.index) == len(asset_cols):
-                last = pd.Series(last.to_numpy(), index=asset_cols)
-            return last.reindex(asset_cols).fillna(0)
-        if isinstance(dwr_result, pd.Series):
-            return pd.Series(float(dwr_result.iloc[-1]), index=asset_cols[:1])
-        return pd.Series(0.0, index=asset_cols)
-
     def _last_scalar(result):
         if isinstance(result, pd.DataFrame):
             return float(result.iloc[-1, 0])
@@ -593,17 +570,17 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
         ann_ret = calc.basic_return_annualised(val, cash_flows, use_initial_CF=init_CF)
         twr = calc.time_weighted_return(val, cash_flows, use_initial_CF=init_CF)
         ann_twr = calc.time_weighted_return_annualised(val, cash_flows, use_initial_CF=init_CF)
-        dwr = calc.dollar_weighted_return(val, cash_flows, use_initial_CF=init_CF)
+        dwr_last = calc.dollar_weighted_return_endpoint(val, cash_flows, use_initial_CF=init_CF)
     elif calc_method == "total":
         total_ret = calc.basic_total_return(val, cash_flows, div_tot, use_initial_CF=init_CF)
         ann_ret = calc.basic_total_return_annualised(val, cash_flows, div_tot, use_initial_CF=init_CF)
         twr = calc.time_weighted_total_return(val, cash_flows, div_tot, use_initial_CF=init_CF)
         ann_twr = calc.time_weighted_total_return_annualised(val, cash_flows, div_tot, use_initial_CF=init_CF)
-        dwr = calc.dollar_weighted_total_return(val, cash_flows, div_tot, use_initial_CF=init_CF)
+        dwr_last = calc.dollar_weighted_total_return_endpoint(val, cash_flows, div_tot, use_initial_CF=init_CF)
     else:
         raise ValueError('Invalid calculation method. Please choose "basic" or "total".')
 
-    dwr_last = _dwr_last_by_asset(dwr, val.columns)
+    dwr_last = dwr_last.reindex(val.columns).fillna(0)
     years_last = calc._elapsed_years_from_first_nonzero(val).iloc[-1].reindex(val.columns).replace(0, np.nan)
     ann_dwr_last = (np.power(1 + dwr_last, 1 / years_last) - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
 
@@ -630,22 +607,22 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
         ann_ret_s = calc.basic_return_annualised(total_val, total_cf, use_initial_CF=init_CF)
         twr_s = calc.time_weighted_return(total_val, total_cf, use_initial_CF=init_CF)
         ann_twr_s = calc.time_weighted_return_annualised(total_val, total_cf, use_initial_CF=init_CF)
-        dwr_s = _single_dwr_series(calc.dollar_weighted_return(total_val, total_cf, use_initial_CF=init_CF))
+        dwr_s = float(calc.dollar_weighted_return_endpoint(total_val, total_cf, use_initial_CF=init_CF).iloc[0])
     else:
         total_ret_s = calc.basic_total_return(total_val, total_cf, total_div, use_initial_CF=init_CF)
         ann_ret_s = calc.basic_total_return_annualised(total_val, total_cf, total_div, use_initial_CF=init_CF)
         twr_s = calc.time_weighted_total_return(total_val, total_cf, total_div, use_initial_CF=init_CF)
         ann_twr_s = calc.time_weighted_total_return_annualised(total_val, total_cf, total_div, use_initial_CF=init_CF)
-        dwr_s = _single_dwr_series(calc.dollar_weighted_total_return(total_val, total_cf, total_div, use_initial_CF=init_CF))
-
-    ann_dwr_s = _annualised_from_cumulative(dwr_s, total_val)
+        dwr_s = float(calc.dollar_weighted_total_return_endpoint(total_val, total_cf, total_div, use_initial_CF=init_CF).iloc[0])
+    years_total = calc._elapsed_years_from_first_nonzero(total_val).iloc[-1]
+    ann_dwr_s = (np.power(1 + dwr_s, 1 / years_total) - 1) if years_total > 0 else 0.0
 
     df.loc[end_idx, "Total Return (%)"] = _last_scalar(total_ret_s) * 100
     df.loc[end_idx, "Ann. Return (%)"] = _last_scalar(ann_ret_s) * 100
     df.loc[end_idx, "TWR (%)"] = _last_scalar(twr_s) * 100
     df.loc[end_idx, "Ann. TWR (%)"] = _last_scalar(ann_twr_s) * 100
-    df.loc[end_idx, "DWR (%)"] = float(dwr_s.iloc[-1]) * 100
-    df.loc[end_idx, "Ann. DWR (%)"] = float(ann_dwr_s.iloc[-1]) * 100
+    df.loc[end_idx, "DWR (%)"] = dwr_s * 100
+    df.loc[end_idx, "Ann. DWR (%)"] = ann_dwr_s * 100
 
     df.loc[len(df.index)] = np.nan
     df.loc[len(df.index) - 1, "Company"] = ""
@@ -659,24 +636,29 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
         if calc_method == "basic":
             bench_total = calc.basic_return(price[index], benchmark_cf)
             bench_ann = calc.basic_return_annualised(price[index], benchmark_cf)
-            bench_dwr = _single_dwr_series(calc.dollar_weighted_return(price[index], benchmark_cf))
+            bench_dwr = float(calc.dollar_weighted_return_endpoint(price[index], benchmark_cf).iloc[0])
         else:
             bench_total = calc.basic_total_return(price[index], benchmark_cf, div[index])
             bench_ann = calc.basic_total_return_annualised(price[index], benchmark_cf, div[index])
-            bench_dwr = _single_dwr_series(calc.dollar_weighted_total_return(price[index], benchmark_cf, div[index]))
-
-        bench_ann_dwr = _annualised_from_cumulative(bench_dwr, price[index])
+            bench_dwr = float(calc.dollar_weighted_total_return_endpoint(price[index], benchmark_cf, div[index]).iloc[0])
+        years_bench = calc._elapsed_years_from_first_nonzero(price[index]).iloc[-1]
+        bench_ann_dwr = (np.power(1 + bench_dwr, 1 / years_bench) - 1) if years_bench > 0 else 0.0
         df.loc[end_idx, "Total Return (%)"] = _last_scalar(bench_total) * 100
         df.loc[end_idx, "Ann. Return (%)"] = _last_scalar(bench_ann) * 100
-        df.loc[end_idx, "TWR (%)"] = df.loc[end_idx, "Total Return (%)"]
-        df.loc[end_idx, "Ann. TWR (%)"] = df.loc[end_idx, "Ann. Return (%)"]
-        df.loc[end_idx, "DWR (%)"] = float(bench_dwr.iloc[-1]) * 100
-        df.loc[end_idx, "Ann. DWR (%)"] = float(bench_ann_dwr.iloc[-1]) * 100
+        # Leave benchmark TWR/DWR fields blank for clearer benchmark reporting semantics.
+        df.loc[end_idx, "TWR (%)"] = np.nan
+        df.loc[end_idx, "Ann. TWR (%)"] = np.nan
+        df.loc[end_idx, "DWR (%)"] = np.nan
+        df.loc[end_idx, "Ann. DWR (%)"] = np.nan
+
+    # Normalize explicit None values so tables render blanks.
+    df = df.replace({None: np.nan, "None": np.nan})
 
     if styles:
         cmap = sns.diverging_palette(20, 145, s=60, as_cmap=True)
         pct_cols = ["Total Return (%)", "TWR (%)", "DWR (%)"]
         ann_cols = ["Ann. Return (%)", "Ann. TWR (%)", "Ann. DWR (%)"]
+        benchmark_row = len(df) - 1
 
         df = (
             df.style.format(
@@ -698,9 +680,9 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
             .background_gradient(cmap=cmap, vmin=-2, vmax=2, subset=(slice(len(df) - 3), "Daily Return (%)"))
             .background_gradient(cmap=cmap, vmin=-100, vmax=100, subset=(slice(len(df) - 3), pct_cols))
             .background_gradient(cmap=cmap, vmin=-10, vmax=10, subset=(slice(len(df) - 3), ann_cols))
-            .background_gradient(cmap=cmap, vmin=-2, vmax=2, subset=(len(df) - 1, "Daily Return (%)"))
-            .background_gradient(cmap=cmap, vmin=-100, vmax=100, subset=(len(df) - 1, pct_cols))
-            .background_gradient(cmap=cmap, vmin=-10, vmax=10, subset=(len(df) - 1, ann_cols))
+            .background_gradient(cmap=cmap, vmin=-2, vmax=2, subset=(benchmark_row, "Daily Return (%)"))
+            .background_gradient(cmap=cmap, vmin=-100, vmax=100, subset=(benchmark_row, ["Total Return (%)"]))
+            .background_gradient(cmap=cmap, vmin=-10, vmax=10, subset=(benchmark_row, ["Ann. Return (%)"]))
         )
 
-    return df
+    return df.fillna("") if not styles else df

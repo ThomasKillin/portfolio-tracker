@@ -2,6 +2,30 @@ import numpy as np
 import pandas as pd
 import numpy_financial as npf
 
+
+def _resolve_dwr_resample_freq(val, resample_freq, base_rows):
+    if resample_freq == "auto":
+        num_rows = len(val)
+        if isinstance(val, pd.DataFrame):
+            num_cols = max(1, val.shape[1])
+        else:
+            num_cols = 1
+        work_units = num_rows * num_cols
+        if work_units <= base_rows:
+            return "B"
+        if work_units <= base_rows * 7:
+            return "W-FRI"
+        if work_units <= base_rows * 30:
+            return "BME"
+        return "BQE"
+    if resample_freq not in ["W", "M", "Q"]:
+        raise ValueError("resample_freq must be 'auto', 'W', 'M', or 'Q'")
+    if resample_freq == "W":
+        return "W-FRI"
+    if resample_freq == "M":
+        return "BME"
+    return "BQE"
+
 def prepare_data(*args, date=None):
         """
         Helper function
@@ -670,27 +694,7 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
     # Prepare the data
     val, cash_flows = prepare_data(val, cash_flows, date=date)
 
-    #TODO: BUsiness quarters / months / weekday
-    # Determine resampling frequency
-    if resample_freq == 'auto':
-        num_rows = len(val)
-        if num_rows <= 100:
-            resample_freq = 'B'  # Business Daily, no resampling needed
-        elif num_rows <= 100 * 7:
-            resample_freq = 'W-FRI'  # Business Weekly
-        elif num_rows <= 100 * 30:
-            resample_freq = 'BME'  # Business Month End
-        else:
-            resample_freq = 'BQE'  # Business Quarter End
-    elif resample_freq not in ['W', 'M', 'Q']:
-        raise ValueError("resample_freq must be 'auto', 'W', 'M', or 'Q'")  
-    # convert to business days, etc
-    elif resample_freq == 'W':
-        resample_freq = 'W-FRI'
-    elif resample_freq == 'M':
-        resample_freq = 'BME'
-    elif resample_freq == 'Q':
-        resample_freq = 'BQE'
+    resample_freq = _resolve_dwr_resample_freq(val, resample_freq, base_rows=100)
     
     DWR = pd.DataFrame([])
     for column in val:
@@ -831,26 +835,7 @@ def dollar_weighted_total_return(val, cash_flows, div, date=None, use_initial_CF
     # Prepare the data
     val, cash_flows, div = prepare_data(val, cash_flows, div, date=date)
 
-    # Determine resampling frequency
-    if resample_freq == 'auto':
-        num_rows = len(val)
-        if num_rows <= 200:
-            resample_freq = 'B'  # Business Daily, no resampling needed
-        elif num_rows <= 200 * 7:
-            resample_freq = 'W-FRI'  # Business Weekly
-        elif num_rows <= 200 * 30:
-            resample_freq = 'BME'  # Business Month End
-        else:
-            resample_freq = 'BQE'  # Business Quarter End
-    elif resample_freq not in ['W', 'M', 'Q']:
-        raise ValueError("resample_freq must be 'auto', 'W', 'M', or 'Q'")  
-    # convert to business days, etc
-    elif resample_freq == 'W':
-        resample_freq = 'W-FRI'
-    elif resample_freq == 'M':
-        resample_freq = 'BME'
-    elif resample_freq == 'Q':
-        resample_freq = 'BQE'
+    resample_freq = _resolve_dwr_resample_freq(val, resample_freq, base_rows=100)
     
     DWR = pd.DataFrame([])
     for column in val:
@@ -903,3 +888,71 @@ def dollar_weighted_total_return(val, cash_flows, div, date=None, use_initial_CF
         DWR = pd.merge(DWR, DWR_individual, how='outer', left_index=True, right_index=True)
 
     return DWR
+
+
+def dollar_weighted_return_endpoint(val, cash_flows, date=None, use_initial_CF=False, resample_freq='auto'):
+    val, cash_flows = prepare_data(val, cash_flows, date=date)
+    resample_freq = _resolve_dwr_resample_freq(val, resample_freq, base_rows=100)
+    endpoints = {}
+
+    for column in val:
+        vcol = val[column]
+        ccol = cash_flows[column]
+        if (vcol == 0).all():
+            endpoints[column] = 0.0
+            continue
+
+        start_index = vcol[vcol != 0].index[0]
+        vcol = vcol.loc[start_index:]
+        ccol = ccol.loc[start_index:]
+        irr_series = (-ccol).astype(float)
+
+        initial_val = vcol.iloc[0]
+        if (not use_initial_CF) or (initial_val == 0):
+            irr_series.iloc[0] = -vcol.iloc[0]
+
+        irr_series = irr_series.resample(resample_freq).sum()
+        vcol_ = vcol.resample(resample_freq).last()
+        cash_stream = np.concatenate([irr_series.to_numpy(), [vcol_.iloc[-1]]])
+        irr = npf.irr(cash_stream)
+        if pd.isna(irr):
+            endpoints[column] = 0.0
+        else:
+            endpoints[column] = float(np.power(1 + irr, len(irr_series)) - 1)
+
+    return pd.Series(endpoints)
+
+
+def dollar_weighted_total_return_endpoint(val, cash_flows, div, date=None, use_initial_CF=False, resample_freq='auto'):
+    val, cash_flows, div = prepare_data(val, cash_flows, div, date=date)
+    resample_freq = _resolve_dwr_resample_freq(val, resample_freq, base_rows=100)
+    endpoints = {}
+
+    for column in val:
+        vcol = val[column]
+        ccol = cash_flows[column]
+        dcol = div[column]
+        if (vcol == 0).all():
+            endpoints[column] = 0.0
+            continue
+
+        initial_val = vcol.iloc[0]
+        start_index = vcol[vcol != 0].index[0]
+        vcol = vcol.loc[start_index:]
+        ccol = ccol.loc[start_index:]
+        dcol = dcol.loc[start_index:]
+
+        irr_series = (-ccol + dcol).astype(float)
+        if (not use_initial_CF) or (initial_val == 0):
+            irr_series.iloc[0] = -vcol.iloc[0]
+
+        irr_series = irr_series.resample(resample_freq).sum()
+        vcol_ = vcol.resample(resample_freq).last()
+        cash_stream = np.concatenate([irr_series.to_numpy(), [vcol_.iloc[-1]]])
+        irr = npf.irr(cash_stream)
+        if pd.isna(irr):
+            endpoints[column] = 0.0
+        else:
+            endpoints[column] = float(np.power(1 + irr, len(irr_series)) - 1)
+
+    return pd.Series(endpoints)
