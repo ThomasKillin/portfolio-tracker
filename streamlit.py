@@ -213,6 +213,17 @@ def _fetch_dividend_schedule(tickers, start_date):
     for ticker in sorted(set(tickers)):
         try:
             ticker_obj = yf.Ticker(ticker)
+            ticker_currency = None
+            try:
+                meta = ticker_obj.get_history_metadata() or {}
+                ticker_currency = meta.get("currency")
+            except Exception:
+                ticker_currency = None
+            if not ticker_currency:
+                try:
+                    ticker_currency = ticker_obj.fast_info.get("currency")
+                except Exception:
+                    ticker_currency = None
             div_series = ticker_obj.dividends
             if div_series is None or len(div_series) == 0:
                 warnings_out.append(f"No dividend history returned for {ticker}.")
@@ -252,6 +263,7 @@ def _fetch_dividend_schedule(tickers, start_date):
             div_df = pd.DataFrame(
                 {
                     "Ticker": ticker,
+                    "Currency": ticker_currency,
                     "Ex-Dividend Date": pd.to_datetime(div_series.index).normalize(),
                     "Dividend ($/share)": div_series.values,
                 }
@@ -265,6 +277,7 @@ def _fetch_dividend_schedule(tickers, start_date):
             summary_rows.append(
                 {
                     "Ticker": ticker,
+                    "Currency": ticker_currency,
                     "Events": int(div_series.shape[0]),
                     "Last Ex-Dividend Date": div_series.index.max().date(),
                     "Last Payment Date": (
@@ -740,6 +753,7 @@ def display_data():
                         summary_df = summary_df.merge(last_div_value, on="Ticker", how="left")
                     ordered_cols = [
                         "Ticker",
+                        "Currency",
                         "Events",
                         "Last Ex-Dividend Date",
                         "Last Payment Date",
@@ -818,7 +832,7 @@ def display_data():
                     if has_payment_dates:
                         export_df["Payment Date"] = export_df["Payment Date"].dt.strftime("%Y-%m-%d").fillna("")
                     export_df = export_df[
-                        ["Ticker", "FY", "Ex-Dividend Date"]
+                        ["Ticker", "Currency", "FY", "Ex-Dividend Date"]
                         + (["Payment Date"] if has_payment_dates else [])
                         + [
                             "Dividend ($/share)",
