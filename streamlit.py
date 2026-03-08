@@ -3,11 +3,13 @@ import graphs as graph
 import streamlit as st
 import os
 import pandas as pd
+import numpy as np
 import data_provider as dp
 import warnings
 import re
 from collections import defaultdict
 import seaborn as sns
+import yfinance as yf
 
 # Basic webpage setup
 st.set_page_config(
@@ -154,25 +156,135 @@ def display_readme():
     st.markdown('the portion of the cost base that is to be removed. I.e, a value of `-0.1` indicates a 10% reduction in the cost base.')
     
 
+def _build_fx_return_series(val, fx_rates, scope=None):
+    if fx_rates is None or fx_rates.empty:
+        return None
+
+    if scope is not None:
+        if scope not in fx_rates.columns:
+            return None
+        fx_col = pd.to_numeric(fx_rates[scope], errors="coerce")
+        fx_col = fx_col.reindex(val.index).ffill()
+        first_valid = fx_col.first_valid_index()
+        if first_valid is None:
+            return None
+        base_rate = fx_col.loc[first_valid]
+        if pd.isna(base_rate) or base_rate == 0:
+            return None
+        return (fx_col / base_rate - 1.0) * 100.0
+
+    converted_cols = [c for c in val.columns if c in fx_rates.columns]
+    if not converted_cols:
+        return None
+
+    fx = fx_rates[converted_cols].apply(pd.to_numeric, errors="coerce").reindex(val.index).ffill()
+    first_rates = fx.iloc[0].replace(0, np.nan)
+    fx_ret = fx.divide(first_rates, axis=1) - 1.0
+
+    start_vals = pd.to_numeric(val[converted_cols].iloc[0], errors="coerce").clip(lower=0).fillna(0)
+    if start_vals.sum() > 0:
+        weights = start_vals / start_vals.sum()
+    else:
+        weights = pd.Series(1.0 / len(converted_cols), index=converted_cols)
+
+    return (fx_ret * weights).sum(axis=1, min_count=1) * 100.0
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _fetch_dividend_schedule(tickers, start_date):
+    start_ts = pd.Timestamp(start_date)
+    schedule_rows = []
+    summary_rows = []
+    warnings_out = []
+
+    for ticker in sorted(set(tickers)):
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            div_series = ticker_obj.dividends
+            if div_series is None or len(div_series) == 0:
+                warnings_out.append(f"No dividend history returned for {ticker}.")
+                continue
+
+            div_series = pd.to_numeric(div_series, errors="coerce").dropna()
+            div_index = pd.to_datetime(div_series.index)
+            if getattr(div_index, "tz", None) is not None:
+                div_index = div_index.tz_localize(None)
+            div_series.index = div_index
+            div_series = div_series[div_series.index >= start_ts]
+            if div_series.empty:
+                warnings_out.append(
+                    f"{ticker}: no dividends available on/after {start_ts.date()}."
+                )
+                continue
+
+            payment_date_map = {}
+            try:
+                cal = ticker_obj.calendar
+                if isinstance(cal, pd.DataFrame) and not cal.empty:
+                    cal_row = cal.iloc[0].to_dict()
+                elif isinstance(cal, dict):
+                    cal_row = cal
+                else:
+                    cal_row = {}
+                ex_cal = pd.to_datetime(cal_row.get("Ex-Dividend Date"), errors="coerce")
+                pay_cal = pd.to_datetime(
+                    cal_row.get("Dividend Date", cal_row.get("Payment Date")),
+                    errors="coerce",
+                )
+                if pd.notna(ex_cal) and pd.notna(pay_cal):
+                    payment_date_map[pd.Timestamp(ex_cal).normalize()] = pd.Timestamp(pay_cal).normalize()
+            except Exception:
+                payment_date_map = {}
+
+            div_df = pd.DataFrame(
+                {
+                    "Ticker": ticker,
+                    "Ex-Dividend Date": pd.to_datetime(div_series.index).normalize(),
+                    "Dividend ($/share)": div_series.values,
+                }
+            )
+            div_df["Payment Date"] = div_df["Ex-Dividend Date"].map(payment_date_map)
+            div_df["Cumulative Dividends ($/share)"] = div_df["Dividend ($/share)"].cumsum()
+            schedule_rows.append(div_df)
+
+            cutoff = div_series.index.max() - pd.Timedelta(days=365)
+            ttm_series = div_series.loc[cutoff:]
+            summary_rows.append(
+                {
+                    "Ticker": ticker,
+                    "Events": int(div_series.shape[0]),
+                    "Last Ex-Dividend Date": div_series.index.max().date(),
+                    "Last Payment Date": (
+                        div_df["Payment Date"].dropna().max().date()
+                        if div_df["Payment Date"].notna().any()
+                        else pd.NaT
+                    ),
+                    "Last Dividend ($/share)": float(div_series.iloc[-1]),
+                    "TTM Dividends ($/share)": float(ttm_series.sum()),
+                }
+            )
+        except Exception as exc:
+            warnings_out.append(f"{ticker}: dividend schedule fetch failed ({type(exc).__name__}).")
+
+    schedule_df = pd.concat(schedule_rows, ignore_index=True) if schedule_rows else pd.DataFrame()
+    summary_df = pd.DataFrame(summary_rows)
+    if not summary_df.empty:
+        summary_df = summary_df.sort_values(by="Ticker").reset_index(drop=True)
+    if not schedule_df.empty:
+        schedule_df = schedule_df.sort_values(
+            by=["Ex-Dividend Date", "Ticker"], ascending=[False, True]
+        ).reset_index(drop=True)
+
+    return summary_df, schedule_df, warnings_out
+
+
 def display_data():
     
     if 'portfolio' in st.session_state:     
         
         st.image(os.path.join('screenshots','banner.png'))
-        
-        #st.session_state['display'] = True
-        with st.sidebar:
-            max_date = (
-                st.session_state['portfolio'].index[-2]
-                if len(st.session_state['portfolio'].index) > 1
-                else st.session_state['portfolio'].index[-1]
-            )
-            start_date = st.date_input(':date: Select start date', 
-                                        min_value = st.session_state['portfolio'].index[0],
-                                        max_value = max_date,
-                                        value = st.session_state['portfolio'].index[0],
-                                        on_change=display_data)
-            st.session_state['start_date'] = start_date
+        if 'start_date' not in st.session_state:
+            st.session_state['start_date'] = st.session_state['portfolio'].index[0]
 
         portfolio_version = st.session_state.get("portfolio_version", 0)
         render_key = (
@@ -181,71 +293,89 @@ def display_data():
             index,
         )
         if st.session_state.get("render_cache_key") != render_key:
-            # Extract variables for performance calculations
-            val, cash_flows, price, accum, shares, div, div_ = share.extract_parameters(st.session_state['portfolio'])
-            benchmark_available = index in price.columns
-            benchmark_price = price[index] if benchmark_available else pd.Series(1.0, index=price.index, name=index)
-            benchmark_div = div_[index] if benchmark_available and index in div_.columns else pd.Series(0.0, index=price.index, name=index)
+            try:
+                # Extract variables for performance calculations
+                val, cash_flows, price, accum, shares, div, div_ = share.extract_parameters(st.session_state['portfolio'])
+                fx_rates = st.session_state['portfolio'].attrs.get("fx_rates")
+                benchmark_available = index in price.columns
+                benchmark_price = price[index] if benchmark_available else pd.Series(1.0, index=price.index, name=index)
+                benchmark_div = div_[index] if benchmark_available and index in div_.columns else pd.Series(0.0, index=price.index, name=index)
+                fx_return_total = _build_fx_return_series(val, fx_rates)
 
-            if not benchmark_available:
-                st.warning(
-                    f"Benchmark ticker '{index}' was not found in downloaded price data. "
-                    "Benchmark comparisons are temporarily disabled for this render."
+                if not benchmark_available:
+                    st.warning(
+                        f"Benchmark ticker '{index}' was not found in downloaded price data. "
+                        "Benchmark comparisons are temporarily disabled for this render."
+                    )
+
+                summary_basic = share.stock_summary(
+                    st.session_state['portfolio'],
+                    index,
+                    date=st.session_state['start_date'],
+                    calc_method='basic',
+                )
+                summary_total = share.stock_summary(
+                    st.session_state['portfolio'],
+                    index,
+                    date=st.session_state['start_date'],
+                    calc_method='total',
                 )
 
-            summary_basic = share.stock_summary(
-                st.session_state['portfolio'],
-                index,
-                date=st.session_state['start_date'],
-                calc_method='basic',
-            )
-            summary_total = share.stock_summary(
-                st.session_state['portfolio'],
-                index,
-                date=st.session_state['start_date'],
-                calc_method='total',
-            )
+                fig1 = graph.plot_portfolio_gain_plotly(
+                    val, cash_flows, benchmark_price,
+                    div=div, index_div=benchmark_div,
+                    date=st.session_state['start_date'],
+                    calc_method='basic',
+                    fx_return=fx_return_total,
+                )
+                fig2 = graph.plot_portfolio_gain_plotly(
+                    val, cash_flows, benchmark_price,
+                    div=div, index_div=benchmark_div,
+                    date=st.session_state['start_date'],
+                    calc_method='total',
+                    fx_return=fx_return_total,
+                )
+                fig3 = graph.plot_stock_gain_plotly(
+                    val, cash_flows, date=st.session_state['start_date']
+                )
+                fig4 = graph.plot_stock_holdings_plotly(
+                    val, date=st.session_state['start_date']
+                )
+                fig5 = graph.plot_annualised_return_plotly_(
+                    val, cash_flows, benchmark_price, date=st.session_state['start_date']
+                )
 
-            fig1 = graph.plot_portfolio_gain_plotly(
-                val, cash_flows, benchmark_price,
-                div=div, index_div=benchmark_div,
-                date=st.session_state['start_date'],
-                calc_method='basic',
-            )
-            fig2 = graph.plot_portfolio_gain_plotly(
-                val, cash_flows, benchmark_price,
-                div=div, index_div=benchmark_div,
-                date=st.session_state['start_date'],
-                calc_method='total',
-            )
-            fig3 = graph.plot_stock_gain_plotly(
-                val, cash_flows, date=st.session_state['start_date']
-            )
-            fig4 = graph.plot_stock_holdings_plotly(
-                val, date=st.session_state['start_date']
-            )
-            fig5 = graph.plot_annualised_return_plotly_(
-                val, cash_flows, benchmark_price, date=st.session_state['start_date']
-            )
+                st.session_state["render_cache"] = {
+                    "val": val,
+                    "cash_flows": cash_flows,
+                    "price": price,
+                    "accum": accum,
+                    "shares": shares,
+                    "div": div,
+                    "div_": div_,
+                    "fx_rates": fx_rates,
+                    "summary_basic": summary_basic,
+                    "summary_total": summary_total,
+                    "fig1": fig1,
+                    "fig2": fig2,
+                    "fig3": fig3,
+                    "fig4": fig4,
+                    "fig5": fig5,
+                    "scope_figs": {},
+                }
+                st.session_state["render_cache_key"] = render_key
+            except Exception as exc:
+                st.error(
+                    f"Failed to refresh view after benchmark change ({type(exc).__name__}: {exc})."
+                )
+                if "render_cache" in st.session_state:
+                    st.warning("Showing last successfully rendered view.")
+                else:
+                    return
 
-            st.session_state["render_cache"] = {
-                "val": val,
-                "cash_flows": cash_flows,
-                "price": price,
-                "accum": accum,
-                "shares": shares,
-                "div": div,
-                "div_": div_,
-                "summary_basic": summary_basic,
-                "summary_total": summary_total,
-                "fig1": fig1,
-                "fig2": fig2,
-                "fig3": fig3,
-                "fig4": fig4,
-                "fig5": fig5,
-                "scope_figs": {},
-            }
-            st.session_state["render_cache_key"] = render_key
+        if "render_cache" not in st.session_state:
+            st.info("No render cache available. Click 'Get share price data' to reload.")
+            return
 
         cache = st.session_state["render_cache"]
         val = cache["val"]
@@ -253,6 +383,8 @@ def display_data():
         price = cache["price"]
         div = cache["div"]
         div_ = cache["div_"]
+        accum = cache["accum"]
+        fx_rates = cache.get("fx_rates")
         fig1 = cache["fig1"]
         fig2 = cache["fig2"]
         fig3 = cache["fig3"]
@@ -261,7 +393,9 @@ def display_data():
         summary_basic = cache["summary_basic"]
         summary_total = cache["summary_total"]
         
-        tab1, tab2, tab3, tab4 = st.tabs(['Portfolio Returns', 'Stock Returns', 'Stock details', 'Dividend Metrics'])    
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(
+            ['Portfolio Returns', 'Stock Returns', 'Stock details', 'Dividend Metrics', 'Dividend Schedule']
+        )
         
         with tab1:
             chart_scope_options = ["TOTAL"] + sorted(list(val.columns))
@@ -311,6 +445,7 @@ def display_data():
                             index_div=benchmark_div,
                             date=st.session_state['start_date'],
                             calc_method='basic',
+                            fx_return=_build_fx_return_series(val_scope, fx_rates, scope=chart_scope),
                         ),
                         "total": graph.plot_portfolio_gain_plotly(
                             val_scope,
@@ -320,6 +455,7 @@ def display_data():
                             index_div=benchmark_div,
                             date=st.session_state['start_date'],
                             calc_method='total',
+                            fx_return=_build_fx_return_series(val_scope, fx_rates, scope=chart_scope),
                         ),
                     }
                     cache["scope_figs"] = scope_figs
@@ -353,30 +489,56 @@ def display_data():
             else:
                 col_cum_div = "Cumulative Dividends ($)"
                 col_ttm_div = "Trailing 12M Dividends ($)"
+                col_div_yield = "Dividend Yield (%)"
                 col_ttm_yoc = "TTM Yield on Cost (%)"
                 col_life_yoc = "Lifetime Div/Cost (%)"
 
                 ttm_cutoff = div_cash.index.max() - pd.Timedelta(days=365)
                 ttm_div = div_cash.loc[ttm_cutoff:].sum()
                 invested = cf_sel.clip(lower=0).sum()
-                yield_on_cost_ttm = (ttm_div / invested.replace(0, pd.NA) * 100).fillna(0)
-                lifetime_div_to_cost = (
-                    cum_div.iloc[-1] / invested.replace(0, pd.NA) * 100
-                ).fillna(0)
+                current_value = val.loc[st.session_state['start_date']:].ffill().iloc[-1]
+                current_value_safe = pd.to_numeric(current_value, errors="coerce").where(
+                    pd.to_numeric(current_value, errors="coerce") != 0, np.nan
+                )
+                invested_safe = pd.to_numeric(invested, errors="coerce").where(
+                    pd.to_numeric(invested, errors="coerce") != 0, np.nan
+                )
+                def _safe_pct(numerator, denominator):
+                    den = pd.to_numeric(denominator, errors="coerce")
+                    num = pd.to_numeric(numerator, errors="coerce")
+
+                    if np.isscalar(den):
+                        if pd.isna(den) or den <= 0:
+                            return np.nan
+                        return (num / den) * 100
+
+                    den = den.where(den > 0, np.nan)
+                    return (num / den) * 100
+
+                dividend_yield = _safe_pct(ttm_div, current_value_safe)
+                yield_on_cost_ttm = _safe_pct(ttm_div, invested_safe)
+                lifetime_div_to_cost = _safe_pct(cum_div.iloc[-1], invested_safe)
 
                 div_summary = pd.DataFrame(
                     {
                         col_cum_div: cum_div.iloc[-1],
                         col_ttm_div: ttm_div,
+                        col_div_yield: dividend_yield,
                         col_ttm_yoc: yield_on_cost_ttm,
                         col_life_yoc: lifetime_div_to_cost,
                     }
                 ).sort_index()
+                div_summary = div_summary.replace({None: np.nan})
+                total_dividend_yield = _safe_pct(ttm_div.sum(), current_value.sum())
+                total_ttm_yoc = _safe_pct(ttm_div.sum(), invested.sum())
+                total_life_yoc = _safe_pct(cum_div.iloc[-1].sum(), invested.sum())
+
                 div_summary.loc["TOTAL"] = [
                     div_summary[col_cum_div].sum(),
                     div_summary[col_ttm_div].sum(),
-                    (ttm_div.sum() / max(invested.sum(), 1e-9)) * 100,
-                    (cum_div.iloc[-1].sum() / max(invested.sum(), 1e-9)) * 100,
+                    float(total_dividend_yield) if pd.notna(total_dividend_yield) else np.nan,
+                    float(total_ttm_yoc) if pd.notna(total_ttm_yoc) else np.nan,
+                    float(total_life_yoc) if pd.notna(total_life_yoc) else np.nan,
                 ]
 
                 styled_div_summary = (
@@ -384,19 +546,28 @@ def display_data():
                         {
                             col_cum_div: "{:.2f}",
                             col_ttm_div: "{:.2f}",
+                            col_div_yield: "{:.2f}",
                             col_ttm_yoc: "{:.2f}",
                             col_life_yoc: "{:.2f}",
-                        }
+                        },
+                        na_rep="",
                     )
                     .background_gradient(
                         cmap=sns.diverging_palette(20, 145, s=60, as_cmap=True),
                         vmin=-10,
                         vmax=10,
                         subset=[
+                            col_div_yield,
                             col_ttm_yoc,
-                            col_life_yoc,
                         ],
                     )
+                    .background_gradient(
+                        cmap=sns.diverging_palette(20, 145, s=60, as_cmap=True),
+                        vmin=-100,
+                        vmax=100,
+                        subset=[col_life_yoc],
+                    )
+                    .highlight_null(props="background-color: transparent; color: inherit;")
                 )
                 st.dataframe(styled_div_summary, use_container_width=True)
 
@@ -431,6 +602,126 @@ def display_data():
                     st.plotly_chart(fig_div_cum, use_container_width=True)
                 with c2:
                     st.plotly_chart(fig_div_annual, use_container_width=True)
+
+        with tab5:
+            tickers = sorted(list(val.columns))
+            summary_df, schedule_df, sched_warnings = _fetch_dividend_schedule(
+                tuple(tickers),
+                st.session_state['start_date'],
+            )
+
+            if sched_warnings:
+                with st.expander("Provider notes", expanded=False):
+                    for msg in sched_warnings:
+                        st.warning(msg)
+
+            if summary_df.empty and schedule_df.empty:
+                st.info(
+                    "No dividend schedule data available from Yahoo Finance for the selected "
+                    "tickers/date range."
+                )
+            else:
+                if not summary_df.empty:
+                    styled_schedule_summary = summary_df.style.format(
+                        {
+                            "Last Dividend ($/share)": "{:.4f}",
+                            "TTM Dividends ($/share)": "{:.4f}",
+                        }
+                    )
+                    st.markdown("##### Dividend Schedule Summary")
+                    st.dataframe(styled_schedule_summary, use_container_width=True)
+
+                if not schedule_df.empty:
+                    schedule_work = schedule_df.copy()
+                    schedule_work["Ex-Dividend Date"] = pd.to_datetime(schedule_work["Ex-Dividend Date"])
+                    schedule_work["Payment Date"] = pd.to_datetime(schedule_work["Payment Date"], errors="coerce")
+                    schedule_work["FY"] = np.where(
+                        schedule_work["Ex-Dividend Date"].dt.month >= 7,
+                        schedule_work["Ex-Dividend Date"].dt.year + 1,
+                        schedule_work["Ex-Dividend Date"].dt.year,
+                    )
+                    schedule_work["Shares Held (Ex-Date)"] = 0.0
+                    for ticker in schedule_work["Ticker"].unique():
+                        if ticker in accum.columns:
+                            tmask = schedule_work["Ticker"] == ticker
+                            ex_dates = pd.DatetimeIndex(schedule_work.loc[tmask, "Ex-Dividend Date"])
+                            holdings = (
+                                pd.to_numeric(accum[ticker], errors="coerce")
+                                .reindex(ex_dates, method="ffill")
+                                .fillna(0.0)
+                                .values
+                            )
+                            schedule_work.loc[tmask, "Shares Held (Ex-Date)"] = holdings
+                    schedule_work["Dividend Value ($)"] = (
+                        pd.to_numeric(schedule_work["Dividend ($/share)"], errors="coerce")
+                        * pd.to_numeric(schedule_work["Shares Held (Ex-Date)"], errors="coerce")
+                    )
+
+                    ticker_options = ["ALL"] + sorted(schedule_work["Ticker"].unique().tolist())
+                    selected_ticker = st.selectbox(
+                        "Dividend schedule scope",
+                        options=ticker_options,
+                        index=0,
+                        key="div_schedule_scope",
+                    )
+
+                    fy_options = sorted(schedule_work["FY"].dropna().astype(int).unique().tolist(), reverse=True)
+                    selected_fy = st.selectbox(
+                        "Dividend export financial year",
+                        options=fy_options,
+                        index=0,
+                        key="div_schedule_fy",
+                        format_func=lambda y: f"FY{y} ({y-1}-07-01 to {y}-06-30)",
+                    )
+
+                    if selected_ticker == "ALL":
+                        schedule_view = schedule_work
+                    else:
+                        schedule_view = schedule_work[schedule_work["Ticker"] == selected_ticker]
+
+                    export_df = schedule_view[schedule_view["FY"] == selected_fy].copy()
+                    export_df = export_df.sort_values(by=["Ex-Dividend Date", "Ticker"], ascending=[True, True])
+                    export_df["Ex-Dividend Date"] = export_df["Ex-Dividend Date"].dt.strftime("%Y-%m-%d")
+                    export_df["Payment Date"] = export_df["Payment Date"].dt.strftime("%Y-%m-%d").fillna("")
+                    export_df = export_df[
+                        [
+                            "Ticker",
+                            "FY",
+                            "Ex-Dividend Date",
+                            "Payment Date",
+                            "Dividend ($/share)",
+                            "Shares Held (Ex-Date)",
+                            "Dividend Value ($)",
+                            "Cumulative Dividends ($/share)",
+                        ]
+                    ]
+
+                    st.download_button(
+                        label="Export selected FY dividend CSV",
+                        data=export_df.to_csv(index=False).encode("utf-8"),
+                        file_name=f"dividend_schedule_FY{selected_fy}_{selected_ticker}.csv",
+                        mime="text/csv",
+                        disabled=export_df.empty,
+                        help="Exports dividend event details for the selected scope and financial year.",
+                    )
+                    if export_df.empty:
+                        st.info("No dividend events found for the selected scope and financial year.")
+
+                    schedule_view = schedule_view.drop(columns=["FY"]).copy()
+                    schedule_view["Ex-Dividend Date"] = schedule_view["Ex-Dividend Date"].dt.date
+                    schedule_view["Payment Date"] = schedule_view["Payment Date"].dt.date
+                    st.markdown("##### Dividend Events")
+                    st.dataframe(
+                        schedule_view.style.format(
+                            {
+                                "Dividend ($/share)": "{:.4f}",
+                                "Shares Held (Ex-Date)": "{:.2f}",
+                                "Dividend Value ($)": "{:.2f}",
+                                "Cumulative Dividends ($/share)": "{:.4f}",
+                            }
+                        ),
+                        use_container_width=True,
+                    )
 
         display_calc_details()
             
@@ -510,6 +801,27 @@ with st.sidebar:
                 button = None
  
                      
+    if 'portfolio' in st.session_state:
+        min_ts = pd.Timestamp(st.session_state['portfolio'].index[0])
+        max_ts = pd.Timestamp(
+            st.session_state['portfolio'].index[-2]
+            if len(st.session_state['portfolio'].index) > 1
+            else st.session_state['portfolio'].index[-1]
+        )
+        default_start_ts = pd.Timestamp(st.session_state.get('start_date', min_ts))
+        if default_start_ts < min_ts:
+            default_start_ts = min_ts
+        if default_start_ts > max_ts:
+            default_start_ts = max_ts
+        selected_date = st.date_input(
+            ':date: Select start date',
+            min_value=min_ts.date(),
+            max_value=max_ts.date(),
+            value=default_start_ts.date(),
+            key='start_date_input',
+        )
+        st.session_state['start_date'] = pd.Timestamp(selected_date)
+
 # If button clicked, refresh market data into session state.
 if button:
     merged_portfolio = get_data(file=file, index=index)

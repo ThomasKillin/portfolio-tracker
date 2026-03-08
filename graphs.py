@@ -135,7 +135,7 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, date=None
     return fig
 """
 
-def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div=None, date=None, calc_method='basic', add_toggle=False):
+def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div=None, date=None, calc_method='basic', add_toggle=False, fx_return=None):
     
     init_CF = (val.shape == val[date:].shape)
     
@@ -181,6 +181,8 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
     
     y1, y2, y3, y4 = calculate_returns(calc_method)
     
+    plot_index = val.loc[date:].index if date is not None else val.index
+
     if calc_method == 'basic':
         plot_titles = ("<b>Price return", "<b>Total Portfolio Value")
         portfolio_val = val.sum(axis=1) / 1000
@@ -230,8 +232,8 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
     fig.update_xaxes(title_text="Date", row=1, col=1)
 
     # Plot total portfolio value
-    fig.add_trace(go.Scatter(x=val.index,
-                             y=portfolio_val,  
+    fig.add_trace(go.Scatter(x=plot_index,
+                             y=portfolio_val.loc[plot_index],
                              name="Total Value",
                              legendgroup='group5',
                              legend='legend2',
@@ -240,20 +242,34 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
                              row=1, col=2)
 
     if calc_method == 'total':
-        fig.add_trace(go.Scatter(x=val.index,
-                                 y=price_only_val,
+        fig.add_trace(go.Scatter(x=plot_index,
+                                 y=price_only_val.loc[plot_index],
                                  name="Value (Price Only)",
                                  legendgroup='group6',
                                  legend='legend2',
                                  line=dict(color='rgb(14, 116, 144)')),
                                  row=1, col=2)
-        fig.add_trace(go.Scatter(x=val.index,
-                                 y=div_only_val,
+        fig.add_trace(go.Scatter(x=plot_index,
+                                 y=div_only_val.loc[plot_index],
                                  name="Accumulated Dividends",
                                  legendgroup='group7',
                                  legend='legend2',
                                  line=dict(color='rgb(107, 114, 128)')),
                                  row=1, col=2)
+        if fx_return is not None:
+            fx_return_series = pd.to_numeric(pd.Series(fx_return), errors='coerce').reindex(val.index).ffill()
+            first_valid = fx_return_series.first_valid_index()
+            if first_valid is not None:
+                fx_base_val = portfolio_val.loc[first_valid]
+                fx_value = fx_base_val * (fx_return_series / 100.0)
+                fig.add_trace(go.Scatter(
+                    x=plot_index,
+                    y=fx_value.loc[plot_index],
+                    name="FX Return Effect",
+                    legendgroup='group8',
+                    legend='legend2',
+                    line=dict(color='rgb(245, 158, 11)', dash='dot')
+                ), row=1, col=2)
 
     # Set layout for total portfolio value subplot
     fig.update_yaxes(title_text="Value (*$1000s)", row=1, col=2)
@@ -442,7 +458,7 @@ def plot_dividend_metrics_plotly(div_cash, selection="TOTAL"):
     fig_div_annual = go.Figure()
     fig_div_annual.add_trace(
         go.Bar(
-            x=annual_div_total.index.year.astype(str),
+            x=annual_div_total.index,
             y=annual_div_total.values,
             name="Annual Dividends",
             marker_color=colors[4],
@@ -450,10 +466,15 @@ def plot_dividend_metrics_plotly(div_cash, selection="TOTAL"):
     )
     fig_div_annual.update_layout(
         title=f"<b>Annual Dividends{title_suffix}</b>",
-        xaxis_title="Year",
+        xaxis_title="Date",
         yaxis_title="Dividends ($)",
         height=380,
-        xaxis=dict(showgrid=True),
+        xaxis=dict(
+            showgrid=True,
+            tickmode="array",
+            tickvals=annual_div_total.index,
+            ticktext=annual_div_total.index.year.astype(str),
+        ),
         yaxis=dict(showgrid=True),
     )
 
