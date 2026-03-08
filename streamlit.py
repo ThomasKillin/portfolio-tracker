@@ -58,6 +58,12 @@ def get_data(file, index):
             )
         else:
             st.success('Success')
+        st.session_state["provider_diagnostics"] = {
+            "provider": provider,
+            "requested_index": index,
+            "fetched": fetched,
+            "failed": failed,
+        }
     
     return merged_portfolio
             
@@ -112,6 +118,13 @@ def process_data(merged_portfolio, target_currency):
 
     for msg in sorted(other_fx_messages):
         st.warning(msg)
+
+    st.session_state["fx_diagnostics"] = {
+        "target_currency": target_currency,
+        "pair_failures": {k: sorted(v) for k, v in fx_pair_failures.items()},
+        "unknown_currency_tickers": sorted(unknown_currency_tickers),
+        "other_messages": sorted(other_fx_messages),
+    }
 
     st.session_state['portfolio'] = portfolio
     st.session_state["portfolio_version"] = st.session_state.get("portfolio_version", 0) + 1
@@ -278,6 +291,65 @@ def _fetch_dividend_schedule(tickers, start_date):
     return summary_df, schedule_df, warnings_out
 
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def _fetch_upcoming_dividends(tickers):
+    today = pd.Timestamp.today().normalize()
+    rows = []
+    warnings_out = []
+
+    for ticker in sorted(set(tickers)):
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            cal = ticker_obj.calendar
+            if isinstance(cal, pd.DataFrame) and not cal.empty:
+                cal_row = cal.iloc[0].to_dict()
+            elif isinstance(cal, dict):
+                cal_row = cal
+            else:
+                cal_row = {}
+
+            ex_date = pd.to_datetime(cal_row.get("Ex-Dividend Date"), errors="coerce")
+            pay_date = pd.to_datetime(
+                cal_row.get("Dividend Date", cal_row.get("Payment Date")),
+                errors="coerce",
+            )
+            if pd.notna(ex_date) and getattr(ex_date, "tzinfo", None) is not None:
+                ex_date = ex_date.tz_localize(None)
+            if pd.notna(pay_date) and getattr(pay_date, "tzinfo", None) is not None:
+                pay_date = pay_date.tz_localize(None)
+
+            # Keep only genuinely upcoming calendar entries.
+            if pd.notna(ex_date) and ex_date.normalize() >= today:
+                days_to_ex = (ex_date.normalize() - today).days
+                rows.append(
+                    {
+                        "Ticker": ticker,
+                        "Upcoming Ex-Dividend Date": ex_date,
+                        "Upcoming Payment Date": pay_date,
+                        "Days to Ex-Div": days_to_ex,
+                        "Source": "Calendar",
+                    }
+                )
+                continue
+
+            # No fallback estimation: if calendar has no upcoming ex-date, omit ticker.
+        except Exception as exc:
+            warnings_out.append(
+                f"{ticker}: upcoming dividend calendar fetch failed ({type(exc).__name__})."
+            )
+
+    upcoming_df = pd.DataFrame(rows)
+    if not upcoming_df.empty:
+        # Guard against stale provider outputs.
+        upcoming_df = upcoming_df[upcoming_df["Days to Ex-Div"].fillna(0) >= 0]
+        upcoming_df = upcoming_df.sort_values(
+            by=["Upcoming Ex-Dividend Date", "Ticker"],
+            ascending=[True, True],
+            na_position="last",
+        ).reset_index(drop=True)
+    return upcoming_df, warnings_out
+
+
 def display_data():
     
     if 'portfolio' in st.session_state:     
@@ -361,6 +433,10 @@ def display_data():
                     "fig3": fig3,
                     "fig4": fig4,
                     "fig5": fig5,
+                    "benchmark_status": {
+                        "selected": index,
+                        "available": bool(benchmark_available),
+                    },
                     "scope_figs": {},
                 }
                 st.session_state["render_cache_key"] = render_key
@@ -390,11 +466,12 @@ def display_data():
         fig3 = cache["fig3"]
         fig4 = cache["fig4"]
         fig5 = cache["fig5"]
+        benchmark_status = cache.get("benchmark_status", {"selected": index, "available": False})
         summary_basic = cache["summary_basic"]
         summary_total = cache["summary_total"]
         
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(
-            ['Portfolio Returns', 'Stock Returns', 'Stock details', 'Dividend Metrics', 'Dividend Schedule']
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+            ['Portfolio Returns', 'Stock Returns', 'Stock details', 'Dividend Metrics', 'Dividend Schedule', 'Diagnostics']
         )
         
         with tab1:
@@ -609,10 +686,12 @@ def display_data():
                 tuple(tickers),
                 st.session_state['start_date'],
             )
+            upcoming_df, upcoming_warnings = _fetch_upcoming_dividends(tuple(tickers))
 
-            if sched_warnings:
+            provider_notes = list(sched_warnings) + list(upcoming_warnings)
+            if provider_notes:
                 with st.expander("Provider notes", expanded=False):
-                    for msg in sched_warnings:
+                    for msg in provider_notes:
                         st.warning(msg)
 
             if summary_df.empty and schedule_df.empty:
@@ -621,20 +700,13 @@ def display_data():
                     "tickers/date range."
                 )
             else:
-                if not summary_df.empty:
-                    styled_schedule_summary = summary_df.style.format(
-                        {
-                            "Last Dividend ($/share)": "{:.4f}",
-                            "TTM Dividends ($/share)": "{:.4f}",
-                        }
-                    )
-                    st.markdown("##### Dividend Schedule Summary")
-                    st.dataframe(styled_schedule_summary, use_container_width=True)
-
+                schedule_work = pd.DataFrame()
+                has_payment_dates = False
                 if not schedule_df.empty:
                     schedule_work = schedule_df.copy()
                     schedule_work["Ex-Dividend Date"] = pd.to_datetime(schedule_work["Ex-Dividend Date"])
                     schedule_work["Payment Date"] = pd.to_datetime(schedule_work["Payment Date"], errors="coerce")
+                    has_payment_dates = schedule_work["Payment Date"].notna().any()
                     schedule_work["FY"] = np.where(
                         schedule_work["Ex-Dividend Date"].dt.month >= 7,
                         schedule_work["Ex-Dividend Date"].dt.year + 1,
@@ -657,6 +729,67 @@ def display_data():
                         * pd.to_numeric(schedule_work["Shares Held (Ex-Date)"], errors="coerce")
                     )
 
+                if not summary_df.empty:
+                    if not schedule_work.empty:
+                        last_div_value = (
+                            schedule_work.sort_values(["Ticker", "Ex-Dividend Date"])
+                            .groupby("Ticker", as_index=False)
+                            .tail(1)[["Ticker", "Dividend Value ($)"]]
+                            .rename(columns={"Dividend Value ($)": "Last Dividend ($)"})
+                        )
+                        summary_df = summary_df.merge(last_div_value, on="Ticker", how="left")
+                    ordered_cols = [
+                        "Ticker",
+                        "Events",
+                        "Last Ex-Dividend Date",
+                        "Last Payment Date",
+                        "Last Dividend ($/share)",
+                        "Last Dividend ($)",
+                        "TTM Dividends ($/share)",
+                    ]
+                    if (
+                        "Last Payment Date" in summary_df.columns
+                        and summary_df["Last Payment Date"].isna().all()
+                    ):
+                        summary_df = summary_df.drop(columns=["Last Payment Date"])
+                    summary_df = summary_df[
+                        [c for c in ordered_cols if c in summary_df.columns]
+                    ]
+                    styled_schedule_summary = summary_df.style.format(
+                        {
+                            "Last Dividend ($/share)": "{:.4f}",
+                            "Last Dividend ($)": "{:.2f}",
+                            "TTM Dividends ($/share)": "{:.4f}",
+                        }
+                    )
+                    st.markdown("##### Dividend Schedule Summary")
+                    st.dataframe(styled_schedule_summary, use_container_width=True)
+
+                if not upcoming_df.empty:
+                    if (
+                        "Upcoming Payment Date" in upcoming_df.columns
+                        and upcoming_df["Upcoming Payment Date"].isna().all()
+                    ):
+                        upcoming_df = upcoming_df.drop(columns=["Upcoming Payment Date"])
+                    upcoming_view = upcoming_df.copy()
+                    upcoming_view["Upcoming Ex-Dividend Date"] = pd.to_datetime(
+                        upcoming_view["Upcoming Ex-Dividend Date"], errors="coerce"
+                    ).dt.date
+                    if "Upcoming Payment Date" in upcoming_view.columns:
+                        upcoming_view["Upcoming Payment Date"] = pd.to_datetime(
+                            upcoming_view["Upcoming Payment Date"], errors="coerce"
+                        ).dt.date
+                    st.markdown("##### Upcoming Dividends")
+                    st.dataframe(
+                        upcoming_view.style.format(
+                            {
+                                "Days to Ex-Div": "{:.0f}",
+                            }
+                        ),
+                        use_container_width=True,
+                    )
+
+                if not schedule_df.empty:
                     ticker_options = ["ALL"] + sorted(schedule_work["Ticker"].unique().tolist())
                     selected_ticker = st.selectbox(
                         "Dividend schedule scope",
@@ -682,13 +815,12 @@ def display_data():
                     export_df = schedule_view[schedule_view["FY"] == selected_fy].copy()
                     export_df = export_df.sort_values(by=["Ex-Dividend Date", "Ticker"], ascending=[True, True])
                     export_df["Ex-Dividend Date"] = export_df["Ex-Dividend Date"].dt.strftime("%Y-%m-%d")
-                    export_df["Payment Date"] = export_df["Payment Date"].dt.strftime("%Y-%m-%d").fillna("")
+                    if has_payment_dates:
+                        export_df["Payment Date"] = export_df["Payment Date"].dt.strftime("%Y-%m-%d").fillna("")
                     export_df = export_df[
-                        [
-                            "Ticker",
-                            "FY",
-                            "Ex-Dividend Date",
-                            "Payment Date",
+                        ["Ticker", "FY", "Ex-Dividend Date"]
+                        + (["Payment Date"] if has_payment_dates else [])
+                        + [
                             "Dividend ($/share)",
                             "Shares Held (Ex-Date)",
                             "Dividend Value ($)",
@@ -709,7 +841,10 @@ def display_data():
 
                     schedule_view = schedule_view.drop(columns=["FY"]).copy()
                     schedule_view["Ex-Dividend Date"] = schedule_view["Ex-Dividend Date"].dt.date
-                    schedule_view["Payment Date"] = schedule_view["Payment Date"].dt.date
+                    if has_payment_dates:
+                        schedule_view["Payment Date"] = schedule_view["Payment Date"].dt.date
+                    else:
+                        schedule_view = schedule_view.drop(columns=["Payment Date"])
                     st.markdown("##### Dividend Events")
                     st.dataframe(
                         schedule_view.style.format(
@@ -722,6 +857,60 @@ def display_data():
                         ),
                         use_container_width=True,
                     )
+
+        with tab6:
+            st.markdown("##### Data Provider Status")
+            provider_diag = st.session_state.get("provider_diagnostics", {})
+            provider_rows = [
+                {
+                    "Provider": provider_diag.get("provider", ""),
+                    "Requested Benchmark": provider_diag.get("requested_index", ""),
+                    "Fetched Tickers": len(provider_diag.get("fetched", [])),
+                    "Failed Tickers": len(provider_diag.get("failed", {})),
+                }
+            ]
+            st.dataframe(pd.DataFrame(provider_rows), use_container_width=True)
+
+            failed_map = provider_diag.get("failed", {})
+            if failed_map:
+                failed_df = pd.DataFrame(
+                    [{"Ticker": k, "Reason": v} for k, v in failed_map.items()]
+                ).sort_values("Ticker")
+                st.markdown("##### Provider Failures")
+                st.dataframe(failed_df, use_container_width=True)
+
+            st.markdown("##### FX Conversion Status")
+            fx_diag = st.session_state.get("fx_diagnostics", {})
+            fx_rows = []
+            for pair, tickers in fx_diag.get("pair_failures", {}).items():
+                fx_rows.append(
+                    {
+                        "FX Pair": pair,
+                        "Status": "FAILED",
+                        "Tickers": ", ".join(tickers),
+                    }
+                )
+            if not fx_rows:
+                fx_rows = [{"FX Pair": "All attempted pairs", "Status": "OK", "Tickers": ""}]
+            st.dataframe(pd.DataFrame(fx_rows), use_container_width=True)
+
+            unknown_tickers = fx_diag.get("unknown_currency_tickers", [])
+            if unknown_tickers:
+                st.warning(
+                    "Currency metadata unavailable for: " + ", ".join(unknown_tickers)
+                )
+
+            st.markdown("##### Benchmark Status")
+            bench_diag = pd.DataFrame(
+                [
+                    {
+                        "Selected Benchmark": benchmark_status.get("selected", index),
+                        "Available in Price Data": benchmark_status.get("available", False),
+                        "Start Date": str(st.session_state['start_date'].date()) if isinstance(st.session_state.get('start_date'), pd.Timestamp) else str(st.session_state.get('start_date')),
+                    }
+                ]
+            )
+            st.dataframe(bench_diag, use_container_width=True)
 
         display_calc_details()
             
@@ -821,6 +1010,7 @@ with st.sidebar:
             key='start_date_input',
         )
         st.session_state['start_date'] = pd.Timestamp(selected_date)
+        
 
 # If button clicked, refresh market data into session state.
 if button:
