@@ -56,6 +56,47 @@ def _download_single_ticker_history(ticker, start_time):
     return single if isinstance(single, pd.DataFrame) else pd.DataFrame()
 
 
+def download_price_div_series(ticker, start_date):
+    """
+    Download close/dividend history for a single ticker from yfinance.
+    Returns a DataFrame indexed by business date with columns: Close, Dividends.
+    """
+    start_time = pd.Timestamp(start_date).strftime("%Y-%m-%d")
+    try:
+        df = yf.download(
+            tickers=ticker,
+            start=start_time,
+            interval="1d",
+            auto_adjust=False,
+            actions=True,
+            repair=True,
+            progress=False,
+            threads=False,
+            timeout=20,
+            multi_level_index=False,
+        )
+    except Exception:
+        df = pd.DataFrame()
+
+    if df is None or df.empty:
+        df = _download_single_ticker_history(ticker, start_time)
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+
+    if "Close" not in df.columns:
+        return pd.DataFrame()
+
+    if "Dividends" not in df.columns:
+        df["Dividends"] = 0.0
+
+    out = df[["Close", "Dividends"]].copy()
+    return out.sort_index().asfreq("B")
+
+
 ###################################################################################################
 def get_userdata(filename):
     """
