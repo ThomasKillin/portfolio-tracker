@@ -357,6 +357,7 @@ def convert_currency(merged_portfolio, target_currency):
     # Extract tickers from the merged portfolio
     tickers = converted_portfolio.columns.get_level_values('Company').unique()
     fx_cache = {}
+    fx_rates_by_ticker = {}
     
     # Get currencies for each ticker
     currencies = {}
@@ -427,7 +428,13 @@ def convert_currency(merged_portfolio, target_currency):
                 column = (param, ticker)
                 if column in converted_portfolio.columns:
                     converted_portfolio.loc[:, column] = converted_portfolio.loc[:, column] * exchange_rate
-    
+            fx_rates_by_ticker[ticker] = exchange_rate.copy()
+    if fx_rates_by_ticker:
+        fx_rates_df = pd.DataFrame(fx_rates_by_ticker).reindex(converted_portfolio.index).ffill()
+    else:
+        fx_rates_df = pd.DataFrame(index=converted_portfolio.index)
+    converted_portfolio.attrs["fx_rates"] = fx_rates_df
+    converted_portfolio.attrs["target_currency"] = target_currency
     return converted_portfolio
 
 
