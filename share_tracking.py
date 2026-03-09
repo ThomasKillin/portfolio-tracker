@@ -3,10 +3,20 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import warnings
+import logging
 
 # from datetime import datetime
 import sys
 import yfinance as yf
+
+# Suppress non-fatal yfinance quoteSummary noise (e.g., 404 fundamentals on some ETFs).
+for _logger_name in (
+    "yfinance",
+    "yfinance.base",
+    "yfinance.scrapers",
+    "yfinance.scrapers.quote",
+):
+    logging.getLogger(_logger_name).setLevel(logging.CRITICAL)
 
 # TODO:
 # Allow specification of a subset of dates when plotting portfolio performance
