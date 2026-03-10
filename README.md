@@ -5,8 +5,7 @@
 Portfolio Tracker compares an equity portfolio against a benchmark and reports price-return and total-return performance.
 
 ## Live Demo
-- Public Streamlit app: `TODO - add Streamlit URL after first GitHub commit`
-- Note: The hosted demo may have cold-start delays and provider rate limits.
+- Public Streamlit app: https://portfolio-tracker-pzhgdnwzfrt8lyl4m448ms.streamlit.app/
 
 ## Current status
 - Primary UI: Streamlit (`streamlit.py`)
