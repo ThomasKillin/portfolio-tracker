@@ -215,16 +215,18 @@ def _fetch_dividend_schedule(tickers, start_date):
             ticker_obj = yf.Ticker(ticker)
             ticker_currency = None
             try:
-                meta = ticker_obj.get_history_metadata() or {}
+                meta = share.safe_yf_call(ticker_obj.get_history_metadata) or {}
                 ticker_currency = meta.get("currency")
             except Exception:
                 ticker_currency = None
             if not ticker_currency:
                 try:
-                    ticker_currency = ticker_obj.fast_info.get("currency")
+                    ticker_currency = share.safe_yf_call(
+                        lambda: ticker_obj.fast_info.get("currency")
+                    )
                 except Exception:
                     ticker_currency = None
-            div_series = ticker_obj.dividends
+            div_series = share.safe_yf_call(lambda: ticker_obj.dividends)
             if div_series is None or len(div_series) == 0:
                 warnings_out.append(f"No dividend history returned for {ticker}.")
                 continue
@@ -243,7 +245,7 @@ def _fetch_dividend_schedule(tickers, start_date):
 
             payment_date_map = {}
             try:
-                cal = ticker_obj.calendar
+                cal = share.safe_yf_call(lambda: ticker_obj.calendar)
                 if isinstance(cal, pd.DataFrame) and not cal.empty:
                     cal_row = cal.iloc[0].to_dict()
                 elif isinstance(cal, dict):
@@ -313,7 +315,7 @@ def _fetch_upcoming_dividends(tickers):
     for ticker in sorted(set(tickers)):
         try:
             ticker_obj = yf.Ticker(ticker)
-            cal = ticker_obj.calendar
+            cal = share.safe_yf_call(lambda: ticker_obj.calendar)
             if isinstance(cal, pd.DataFrame) and not cal.empty:
                 cal_row = cal.iloc[0].to_dict()
             elif isinstance(cal, dict):
@@ -421,7 +423,7 @@ def display_data():
                     fx_return=fx_return_total,
                 )
                 fig3 = graph.plot_stock_gain_plotly(
-                    val, cash_flows, date=st.session_state['start_date']
+                    val, cash_flows, date=st.session_state['start_date'], accum=accum
                 )
                 fig4 = graph.plot_stock_holdings_plotly(
                     val, date=st.session_state['start_date']
@@ -520,12 +522,23 @@ def display_data():
                     div_scope = div[[chart_scope]] if chart_scope in div.columns else pd.DataFrame(
                         {chart_scope: 0.0}, index=val_scope.index
                     )
+                    # For closed positions, stop plotting after final active holding date.
+                    acc_series = accum[chart_scope] if chart_scope in accum.columns else pd.Series(0.0, index=val_scope.index)
+                    active_idx = acc_series[acc_series > 0].index
+                    if len(active_idx) > 0 and float(acc_series.iloc[-1]) <= 1e-12:
+                        cutoff = active_idx[-1]
+                        val_scope = val_scope.loc[:cutoff]
+                        cf_scope = cf_scope.loc[:cutoff]
+                        div_scope = div_scope.loc[:cutoff]
                     benchmark_price = (
                         price[index] if index in price.columns else pd.Series(1.0, index=price.index, name=index)
                     )
                     benchmark_div = (
                         div_[index] if index in div_.columns else pd.Series(0.0, index=price.index, name=index)
                     )
+                    if len(active_idx) > 0 and float(acc_series.iloc[-1]) <= 1e-12:
+                        benchmark_price = benchmark_price.loc[:cutoff]
+                        benchmark_div = benchmark_div.loc[:cutoff]
                     scope_figs[scope_key] = {
                         "basic": graph.plot_portfolio_gain_plotly(
                             val_scope,
@@ -565,7 +578,7 @@ def display_data():
         with tab3:
             col1, col2 = st.columns([1, 1])
             with col1:
-                st.plotly_chart(fig4)    
+                st.plotly_chart(fig4)
             with col2:    
                 st.plotly_chart(fig5)
 

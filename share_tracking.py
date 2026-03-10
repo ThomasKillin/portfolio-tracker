@@ -3,20 +3,12 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import warnings
-import logging
+import io
+from contextlib import redirect_stderr
 
 # from datetime import datetime
 import sys
 import yfinance as yf
-
-# Suppress non-fatal yfinance quoteSummary noise (e.g., 404 fundamentals on some ETFs).
-for _logger_name in (
-    "yfinance",
-    "yfinance.base",
-    "yfinance.scrapers",
-    "yfinance.scrapers.quote",
-):
-    logging.getLogger(_logger_name).setLevel(logging.CRITICAL)
 
 # TODO:
 # Allow specification of a subset of dates when plotting portfolio performance
@@ -33,6 +25,26 @@ for _logger_name in (
 # add support for multiple currencies
 # add dividends
 # Add automatic control of stock splits
+
+
+def safe_yf_call(func, *args, **kwargs):
+    """
+    Execute a yfinance call while suppressing known non-fatal quoteSummary 404 noise.
+    Re-emits unrelated stderr output.
+    """
+    err_buf = io.StringIO()
+    with redirect_stderr(err_buf):
+        result = func(*args, **kwargs)
+    err_text = err_buf.getvalue()
+    if err_text:
+        for line in err_text.splitlines():
+            if (
+                "No fundamentals data found for symbol" in line
+                or ('HTTP Error 404' in line and "quoteSummary" in line)
+            ):
+                continue
+            print(line, file=sys.stderr)
+    return result
 
 
 def _extract_ticker_history(download_df, ticker, single_ticker=False):
@@ -136,18 +148,78 @@ def get_userdata(filename):
         Time series dataframe containing stock purchase and sale information
     """
 
-    # Get buy/sell data for shares from the .csv file
-    import_a = pd.read_csv(filename, index_col=["Company", "Date"])
+    # Read and normalize user CSV headers (case/spacing insensitive).
+    raw = pd.read_csv(filename)
+    raw.columns = [str(c).strip() for c in raw.columns]
+    lower_map = {c.lower(): c for c in raw.columns}
 
-    # Drop non-required columns, drop NaN rows, drop NaN rows in index, Unstack 'Company' col
-    import_a = import_a.drop(
-        import_a.columns.difference(["Shares", "Price", "Brokerage", "Adjustments"]), axis=1
-    ).dropna(how="all")
-    import_a = import_a.loc[import_a.index.dropna()].unstack(level=0)
+    alias_map = {
+        "company": "Company",
+        "ticker": "Company",
+        "symbol": "Company",
+        "date": "Date",
+        "shares": "Shares",
+        "qty": "Shares",
+        "quantity": "Shares",
+        "price": "Price",
+        "brokerage": "Brokerage",
+        "fees": "Brokerage",
+        "fee": "Brokerage",
+        "adjustments": "Adjustments",
+        "adjustment": "Adjustments",
+    }
+    rename_cols = {}
+    for low, original in lower_map.items():
+        if low in alias_map:
+            rename_cols[original] = alias_map[low]
+    raw = raw.rename(columns=rename_cols)
 
-    # Convert index to Datetime
-    import_a.index = pd.to_datetime(import_a.index, format="%d/%m/%Y")
-    import_a = import_a.sort_index()
+    required = ["Company", "Date", "Shares", "Price"]
+    missing = [c for c in required if c not in raw.columns]
+    if missing:
+        raise ValueError(
+            "CSV is missing required column(s): " + ", ".join(missing)
+        )
+
+    for optional_col in ["Brokerage", "Adjustments"]:
+        if optional_col not in raw.columns:
+            raw[optional_col] = 0.0
+
+    import_a = raw[["Company", "Date", "Shares", "Price", "Brokerage", "Adjustments"]].copy()
+    import_a["Company"] = import_a["Company"].astype(str).str.strip()
+    import_a["Date"] = pd.to_datetime(import_a["Date"], dayfirst=True, errors="coerce")
+    import_a = import_a.dropna(subset=["Company", "Date"]).dropna(how="all")
+
+    for num_col in ["Shares", "Price", "Brokerage", "Adjustments"]:
+        import_a[num_col] = pd.to_numeric(import_a[num_col], errors="coerce")
+    import_a = import_a.dropna(subset=["Shares", "Price"], how="any")
+
+    # Aggregate duplicate company/date rows (multiple fills in one day).
+    def _agg_same_day(group):
+        shares = group["Shares"].sum()
+        brokerage = group["Brokerage"].fillna(0).sum()
+        adjustments = group["Adjustments"].fillna(0).sum()
+        weight = group["Shares"].abs().fillna(0)
+        if weight.sum() > 0:
+            price = (group["Price"] * weight).sum() / weight.sum()
+        else:
+            price = group["Price"].dropna().iloc[-1] if group["Price"].notna().any() else np.nan
+        return pd.Series(
+            {
+                "Shares": shares,
+                "Price": price,
+                "Brokerage": brokerage,
+                "Adjustments": adjustments,
+            }
+        )
+
+    import_a = (
+        import_a.groupby(["Company", "Date"])[["Shares", "Price", "Brokerage", "Adjustments"]]
+        .apply(_agg_same_day)
+        .reset_index()
+    )
+    import_a = import_a.set_index(["Company", "Date"]).sort_index()
+    import_a = import_a.unstack(level=0)
 
     # Set column names
     import_a.columns.rename(["Params", "Company"], inplace=True)
@@ -415,12 +487,12 @@ def convert_currency(merged_portfolio, target_currency):
     for ticker in tickers:
         try:
             ticker_obj = yf.Ticker(ticker)
-            metadata = ticker_obj.get_history_metadata() or {}
+            metadata = safe_yf_call(ticker_obj.get_history_metadata) or {}
             currency = metadata.get("currency")
             if not currency:
                 # fast_info can still provide currency when metadata is incomplete
                 try:
-                    currency = ticker_obj.fast_info.get("currency")
+                    currency = safe_yf_call(lambda: ticker_obj.fast_info.get("currency"))
                 except Exception:
                     currency = None
             if not currency:
@@ -539,7 +611,6 @@ def extract_parameters(processed_portfolio):
 
 def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic", currency=None):
 
-    # Test for portfolio of single stock. (iloc[-1].values line will retuen an error)
     """
     Generates a summary table for portfolio and individual stock performance metrics.
 
@@ -587,16 +658,35 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
         portfolio = convert_currency(portfolio, target_currency=currency)
 
     val_full, cash_flows_full, price_full, accum_full, shares_full, div_tot_full, div_full = extract_parameters(portfolio)
-    init_CF = price_full.shape == price_full[date:].shape
 
-    price_all = price_full[date:]
-    val = val_full.loc[date:].ffill()
-    cash_flows = cash_flows_full.loc[date:].ffill()
-    price = price_full.loc[date:].ffill()
-    accum = accum_full.loc[date:].ffill()
-    shares = shares_full.loc[date:].ffill()
-    div_tot = div_tot_full.loc[date:].ffill()
-    div = div_full.loc[date:].ffill()
+    def _normalize_start_date(date_value, idx):
+        if len(idx) == 0:
+            raise ValueError("Portfolio has no rows.")
+        if date_value is None:
+            return idx[0]
+        ts = pd.Timestamp(date_value)
+        if ts < idx[0]:
+            return idx[0]
+        if ts > idx[-1]:
+            return idx[-1]
+        if ts in idx:
+            return ts
+        pos = idx.searchsorted(ts, side="left")
+        if pos >= len(idx):
+            return idx[-1]
+        return idx[pos]
+
+    start_date = _normalize_start_date(date, price_full.index)
+    init_CF = price_full.shape == price_full[start_date:].shape
+
+    price_all = price_full[start_date:]
+    val = val_full.loc[start_date:].ffill()
+    cash_flows = cash_flows_full.loc[start_date:].ffill()
+    price = price_full.loc[start_date:].ffill()
+    accum = accum_full.loc[start_date:].ffill()
+    shares = shares_full.loc[start_date:].ffill()
+    div_tot = div_tot_full.loc[start_date:].ffill()
+    div = div_full.loc[start_date:].ffill()
 
     def _last_scalar(result):
         if isinstance(result, pd.DataFrame):
@@ -642,12 +732,57 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
     years_last = calc._elapsed_years_from_first_nonzero(val).iloc[-1].reindex(val.columns).replace(0, np.nan)
     ann_dwr_last = (np.power(1 + dwr_last, 1 / years_last) - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
 
-    df["Total Return (%)"] = total_ret.iloc[-1].values * 100
-    df["Ann. Return (%)"] = ann_ret.iloc[-1].values * 100
-    df["TWR (%)"] = twr.iloc[-1].values * 100
-    df["Ann. TWR (%)"] = ann_twr.iloc[-1].values * 100
-    df["DWR (%)"] = dwr_last.values * 100
-    df["Ann. DWR (%)"] = ann_dwr_last.values * 100
+    end_total = total_ret.iloc[-1].reindex(val.columns).copy()
+    end_ann = ann_ret.iloc[-1].reindex(val.columns).copy()
+    end_twr = twr.iloc[-1].reindex(val.columns).copy()
+    end_ann_twr = ann_twr.iloc[-1].reindex(val.columns).copy()
+    end_dwr = dwr_last.reindex(val.columns).copy()
+    end_ann_dwr = ann_dwr_last.reindex(val.columns).copy()
+
+    def _series_return_metrics(vs, cfs, dvs, method, use_initial_cf):
+        if method == "basic":
+            t = calc.basic_return(vs, cfs, use_initial_CF=use_initial_cf)
+            a = calc.basic_return_annualised(vs, cfs, use_initial_CF=use_initial_cf)
+            tw = calc.time_weighted_return(vs, cfs, use_initial_CF=use_initial_cf)
+            atw = calc.time_weighted_return_annualised(vs, cfs, use_initial_CF=use_initial_cf)
+            dw = float(calc.dollar_weighted_return_endpoint(vs, cfs, use_initial_CF=use_initial_cf).iloc[0])
+        else:
+            t = calc.basic_total_return(vs, cfs, dvs, use_initial_CF=use_initial_cf)
+            a = calc.basic_total_return_annualised(vs, cfs, dvs, use_initial_CF=use_initial_cf)
+            tw = calc.time_weighted_total_return(vs, cfs, dvs, use_initial_CF=use_initial_cf)
+            atw = calc.time_weighted_total_return_annualised(vs, cfs, dvs, use_initial_CF=use_initial_cf)
+            dw = float(calc.dollar_weighted_total_return_endpoint(vs, cfs, dvs, use_initial_CF=use_initial_cf).iloc[0])
+        years = calc._elapsed_years_from_first_nonzero(vs).iloc[-1]
+        adw = (np.power(1 + dw, 1 / years) - 1) if years > 0 else 0.0
+        return (
+            float(t.iloc[-1]),
+            float(a.iloc[-1]),
+            float(tw.iloc[-1]),
+            float(atw.iloc[-1]),
+            float(dw),
+            float(adw),
+        )
+
+    # Freeze per-stock returns for positions that are currently closed.
+    for col in val.columns:
+        col_acc = accum[col]
+        active_idx = col_acc[col_acc > 0].index
+        if len(active_idx) == 0:
+            continue
+        last_active = active_idx[-1]
+        if col_acc.iloc[-1] == 0 and last_active < val.index[-1]:
+            v = val[col].loc[:last_active].ffill()
+            cf = cash_flows[col].loc[:last_active].fillna(0)
+            dv = div_tot[col].loc[:last_active].fillna(0)
+            metrics = _series_return_metrics(v, cf, dv, calc_method, init_CF)
+            end_total[col], end_ann[col], end_twr[col], end_ann_twr[col], end_dwr[col], end_ann_dwr[col] = metrics
+
+    df["Total Return (%)"] = end_total.values * 100
+    df["Ann. Return (%)"] = end_ann.values * 100
+    df["TWR (%)"] = end_twr.values * 100
+    df["Ann. TWR (%)"] = end_ann_twr.values * 100
+    df["DWR (%)"] = end_dwr.values * 100
+    df["Ann. DWR (%)"] = end_ann_dwr.values * 100
 
     df = df.sort_index().reset_index()
 
@@ -660,25 +795,26 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
     total_cf = cash_flows.sum(axis=1)
     total_div = div_tot.sum(axis=1)
 
-    if calc_method == "basic":
-        total_ret_s = calc.basic_return(total_val, total_cf, use_initial_CF=init_CF)
-        ann_ret_s = calc.basic_return_annualised(total_val, total_cf, use_initial_CF=init_CF)
-        twr_s = calc.time_weighted_return(total_val, total_cf, use_initial_CF=init_CF)
-        ann_twr_s = calc.time_weighted_return_annualised(total_val, total_cf, use_initial_CF=init_CF)
-        dwr_s = float(calc.dollar_weighted_return_endpoint(total_val, total_cf, use_initial_CF=init_CF).iloc[0])
+    # Freeze aggregate return at the last active holding date if portfolio is currently flat.
+    total_holdings = accum.sum(axis=1)
+    if total_holdings.iloc[-1] == 0 and (total_holdings > 0).any():
+        last_active_total = total_holdings[total_holdings > 0].index[-1]
+        total_val_eval = total_val.loc[:last_active_total].ffill()
+        total_cf_eval = total_cf.loc[:last_active_total].fillna(0)
+        total_div_eval = total_div.loc[:last_active_total].fillna(0)
     else:
-        total_ret_s = calc.basic_total_return(total_val, total_cf, total_div, use_initial_CF=init_CF)
-        ann_ret_s = calc.basic_total_return_annualised(total_val, total_cf, total_div, use_initial_CF=init_CF)
-        twr_s = calc.time_weighted_total_return(total_val, total_cf, total_div, use_initial_CF=init_CF)
-        ann_twr_s = calc.time_weighted_total_return_annualised(total_val, total_cf, total_div, use_initial_CF=init_CF)
-        dwr_s = float(calc.dollar_weighted_total_return_endpoint(total_val, total_cf, total_div, use_initial_CF=init_CF).iloc[0])
-    years_total = calc._elapsed_years_from_first_nonzero(total_val).iloc[-1]
-    ann_dwr_s = (np.power(1 + dwr_s, 1 / years_total) - 1) if years_total > 0 else 0.0
+        total_val_eval = total_val
+        total_cf_eval = total_cf
+        total_div_eval = total_div
 
-    df.loc[end_idx, "Total Return (%)"] = _last_scalar(total_ret_s) * 100
-    df.loc[end_idx, "Ann. Return (%)"] = _last_scalar(ann_ret_s) * 100
-    df.loc[end_idx, "TWR (%)"] = _last_scalar(twr_s) * 100
-    df.loc[end_idx, "Ann. TWR (%)"] = _last_scalar(ann_twr_s) * 100
+    total_ret_s, ann_ret_s, twr_s, ann_twr_s, dwr_s, ann_dwr_s = _series_return_metrics(
+        total_val_eval, total_cf_eval, total_div_eval, calc_method, init_CF
+    )
+
+    df.loc[end_idx, "Total Return (%)"] = total_ret_s * 100
+    df.loc[end_idx, "Ann. Return (%)"] = ann_ret_s * 100
+    df.loc[end_idx, "TWR (%)"] = twr_s * 100
+    df.loc[end_idx, "Ann. TWR (%)"] = ann_twr_s * 100
     df.loc[end_idx, "DWR (%)"] = dwr_s * 100
     df.loc[end_idx, "Ann. DWR (%)"] = ann_dwr_s * 100
 
