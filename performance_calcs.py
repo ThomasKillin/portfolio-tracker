@@ -724,30 +724,6 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
             irr_series = irr_series.resample(resample_freq).sum()
             vcol_ = vcol.resample(resample_freq).last()
             
-            """
-            # Calculate IRR for each period, representing total return since start
-            DWR_individual = pd.Series((
-                (
-                    pd.DataFrame(irr_series)
-                    .reset_index()
-                    .apply(
-                        #lambda x: (np.power(1 + npf.irr(np.concatenate([
-                        #    np.array(irr_series.iloc[0:x.name + 1]),
-                        #    [vcol_.iloc[x.name]]   # TODO: Need to use non-resampled here?
-                        #])), (x.name + 1) / len(irr_series)) - 1) * 100,
-                        #axis=1,
-                        lambda x: npf.irr(np.concatenate([
-                            np.array(irr_series.iloc[: x.name + 1]),
-                            [vcol_.iloc[x.name]]
-                        ])) * 100,
-                        axis=1,
-                    )
-                )
-                .fillna(0)
-                .replace(-1, np.nan)
-                .ffill()
-            ), name=column).set_axis(irr_series.index)
-        """
             # Calculate IRR for each period
             irr_values = []
             for period_end in range(len(irr_series)):
@@ -766,25 +742,6 @@ def dollar_weighted_return(val, cash_flows, date=None, use_initial_CF=False, res
 
         DWR = pd.merge(DWR, DWR_individual, how='outer', left_index=True, right_index=True)
 
-    """
-            # Convert to pd.DataFrame to allow name method to be used
-            DWR_individual = pd.Series((
-                (
-                    pd.DataFrame(irr_series)
-                    .reset_index()
-                    .apply(
-                        #lambda x: npf.irr(np.append(np.array(irr_series.iloc[: x.name + 1])[:-1], vcol_.iloc[x.name]))
-                        lambda x: npf.irr(np.add(np.array(irr_series.iloc[: x.name + 1]), 
-                                          np.append(np.zeros(len(irr_series)-1), vcol.iloc[-1])))
-                        * 100,
-                        axis=1,
-                    )
-                )
-                .fillna(0)
-                .replace(-1, np.nan)
-                .ffill()
-            ), name=column).set_axis(irr_series.index)
-        """
     return DWR
 
 

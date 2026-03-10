@@ -1,53 +1,43 @@
-# Update March 2023
-#### **Now deployable as a Streamlit app!<br/>**
-https://thomaskillin-portfolio-tracker-streamlit-df3gks.streamlit.app/
+# Portfolio Tracker
 
-#### **API key no longer required!<br/>**
-<br/>
+![banner](screenshots/banner_resize.png)
 
+Portfolio Tracker compares an equity portfolio against a benchmark and reports price-return and total-return performance.
 
-![banner_resize](screenshots/banner_resize.png)
+## Live Demo
+- Public Streamlit app: `TODO - add Streamlit URL after first GitHub commit`
+- Note: The hosted demo may have cold-start delays and provider rate limits.
 
-<br/>
+## Current status
+- Primary UI: Streamlit (`streamlit.py`)
+- Data provider (default): `yfinance`
+- Notebook: `main.ipynb` is available and updated to current `share_tracking` APIs
 
-Portfolio tracker tracks the perfomance of a portfolio of equities against a benchmark index.
-
-The users equity portfolio should be saved locally as a csv file in the specified format.
-
-Currently:
-
-* Reads user portfolio data including stock purchases and sales
-* Allows input of a reference stock ticker that can be used benchmark against portfolio performance
-* Gets historical stock price data using the yfinance library
-* Report a summary table of each stock holding, including current price, average price, daily and total % gain
-* Plots portfolio gain metrics including Basic return and Time Weighted return (Modified Dietz return) aginst the return of the benchmark index
-* Plots the percentage gain of each stock holding
-* Plots the value of each stock holding as a percentage of the portfolio value
-* Plots total portfolio value vs time
-* Plots annualised returns
-
+## Features
+- Portfolio upload from CSV (`Company`, `Date`, `Shares`, `Price`, optional `Brokerage`, `Adjustments`)
+- Benchmark comparison (for example `^AXJO`, `^GSPC`, `SPY`)
+- Price return and total shareholder return views
+- Basic return, TWR, DWR, and annualized metrics
+- Dividend metrics and dividend schedule tabs
+- Dividend FY CSV export from Dividend Schedule
+- Diagnostics tab for provider/FX/benchmark status
+- Optional base-currency conversion with soft-fail warnings
 
 ## Screenshots
-![summary](screenshots/summary.PNG)  
 ![portfolio gain](screenshots/portfolio_gain.png)
-![annualised returns_holdings](screenshots/annualised_returns_holdings.png)
+![stock gain](screenshots/stock_gain.png)
+![annualised returns](screenshots/annualised_returns.png)
+![summary](screenshots/summary.PNG)
+![cumulative dividends](screenshots/cumulative_div.png)
+![annual dividends](screenshots/annual_div.png)
 
+## Installation
 
-## Contents
-1. **Installation**
-2. **Usage** 
-3. **Dependencies**
-4. **Metrics**
+### Python runtime
+Primary target: Python 3.12  
+Also commonly used in this repo: Python 3.11
 
-
-## 1. Installation
-
-### Python Runtime
-
-Primary supported runtime is **Python 3.12**.
-
-Recommended environment setup:
-
+### Setup (PowerShell)
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -56,104 +46,88 @@ python -m pip install -r requirements.txt
 python -m pip check
 ```
 
-### Option 1: Streamlit App
+## Run
 
-https://thomaskillin-portfolio-tracker-streamlit-vw6fag.streamlit.app/
-
-
-### Option 2: Jupyter Notebook
-
-1. This project runs as a Jupyter notebook. Installation details can be found here:
-https://jupyter.org/install.html
-
-2. Clone the repo from Github
-
-3. Open the `<main.ipynb>` Jupyter notebook <br>
-[Portfolio tracker Jupyter notebook](https://github.com/ThomasKillin/portfolio-tracker/blob/main/main.ipynb)
-
-4. In the user input cell, input the file location of the share portfolio<br/>
-eg, `'filename = sample_portfolio.csv'`<br/>
-Input the ticker of a stock to compare the portfolio to (optional)<br/>
-The default is `index = 'SPY'` which is an index fund aiming to track the S&P500 index. 
-
-5. Run all cells
-
-
-## 2. Usage
-<br/>
-A .csv file containing the user's stock portfolio data should be placed in the root directory of the repo.
-The naming of the columns should be as follows:<br/>
-
-![CSV example](screenshots/csv_example.png?)
-
-**Company:** Company stock ticker<br/>
-The stock ticker needs to recognised by Yahoo finance. If unsure, check on the Yahoo finance website.<br/>
-See here for valid exchange suffixes [Exchange suffixes](exchange_suffix.md)<br/>
-**Shares:** Number of shares bought or sold (negative number = sold)<br/>
-**Date:** Date in DD/MM/YYYY format<br/>
-**Price:** Price paid/received per share.<br/>
-**Adjustments:** (Optional column) This column allow for a cost base adjustment to be made. Eg, if a company restructure takes place, 
-a portion of the cost base may be split into a new entity. The number entered into the '_Adjustments_' column represents
-the portion of the cost base that is to be removed. I.e, a value of `-0.1` indicates a 10% reduction in the cost base.<br/>
-
-
-## 3. Dependencies
-
-[Portfolio tracker requirements](https://github.com/ThomasKillin/portfolio-tracker/blob/main/requirements.txt)
-
-Dependency workflow:
-- `requirements.in`: direct dependency declarations + compatibility guardrails
-- `requirements.txt`: fully pinned transitive lock generated from `requirements.in`
-
-PowerShell helper tasks:
-
+### Streamlit app (recommended)
 ```powershell
-# install tooling + pinned deps
+streamlit run streamlit.py
+```
+
+### Jupyter notebook (optional)
+1. Install Jupyter: https://jupyter.org/install.html
+2. Open `main.ipynb`
+3. Update `filename` and `index` cells as needed
+4. Run all cells
+
+## Usage
+A `.csv` file containing the user's stock portfolio data should be placed in the repo root (or uploaded in Streamlit).
+
+The naming of the columns should be as follows:
+
+![CSV example](screenshots/csv_example.png)
+
+- `Company`: Company stock ticker  
+  The stock ticker needs to be recognized by Yahoo Finance.  
+  If unsure, check Yahoo Finance directly.  
+  See valid exchange suffixes in [exchange_suffix.md](exchange_suffix.md).
+- `Shares`: Number of shares bought or sold (negative number = sold)
+- `Date`: Date in `DD/MM/YYYY` format
+- `Price`: Price paid/received per share
+- `Brokerage` (optional): Transaction fee. Included in cost base and cash-flow calculations
+- `Adjustments` (optional): Cost-base adjustment factor for events such as restructures/demergers.  
+  Example: a value of `-0.1` indicates a 10% reduction in cost base.
+
+Additional behavior:
+- CSV column names are case-insensitive (`company`, `Company`, `ticker`, etc.)
+- Multiple transactions for the same ticker on the same day are aggregated automatically
+- Transaction dates must be business days
+
+## Dependency workflow
+- `requirements.in`: top-level dependencies
+- `requirements.txt`: pinned lock set
+
+Helper script:
+```powershell
 ./scripts/deps.ps1 -Task install
-
-# recompile lock file from requirements.in
 ./scripts/deps.ps1 -Task compile
-
-# sync env exactly to requirements.txt
 ./scripts/deps.ps1 -Task sync
-
-# validation checks
 ./scripts/deps.ps1 -Task check
 ```
 
-Validation command sequence:
-
+Validation:
 ```powershell
-python -m pip install -r requirements.txt
 python -m pip check
 python -m unittest -q
 python -m py_compile streamlit.py share_tracking.py graphs.py performance_calcs.py
 ```
 
-Troubleshooting:
-- If `pip check` reports conflicts, recreate the virtual environment and reinstall from `requirements.txt`.
-- If Streamlit import issues occur from module shadowing, launch using Streamlit CLI executable:
-  - `streamlit run streamlit.py`
-- If ASX history depth is lower than expected for ETFs, validate listing age (`STW.AX`, `VAS.AX` are <20y listings).
+## Metrics
+Some of the following metrics are used to characterize portfolio performance:
 
-## 4. Metrics
+Reference methodology:  
+https://www.kitces.com/blog/twr-dwr-irr-calculations-performance-reporting-software-methodology-gips-compliance/
 
-Some of the following metrics are used to characterise the portfolio: <br>
-https://www.kitces.com/blog/twr-dwr-irr-calculations-performance-reporting-software-methodology-gips-compliance/ <br>
+1. `Basic return`  
+   Gain divided by invested capital, with interim cash flows treated as if invested from period start.
 
-1. **Basic return**<br>
-The basic rate of return takes the gain for the portfolio and divides by the (original) investment amount
-Cash flows are taken into account by assuming they occurred at the beginning of the investment period
+2. `Total return`  
+   Includes price return plus dividends (where dividend data is available).
 
-2. **Time-weighted-return**<br>
-A time-weighted return attempts to minimize or altogether remove the effects of interim cash flows.
-Cash flows are weighted according to the amount of time they have been part of the portfolio
+3. `TWR (Time-Weighted Return)`  
+   Reduces cash-flow timing effects by linking subperiod returns.
 
-3. **Annualised returns**<br>
-An annualized total return is the geometric average amount of money earned by an investment each 
-year over a given time period. The annualized return formula is calculated as a geometric average 
-to show what an investor would earn over a period of time if the annual return was compounded.
+4. `DWR (Dollar-Weighted Return / IRR-style)`  
+   Reflects return experienced by invested dollars, including timing and size of flows.
 
+5. `Annualized columns (Ann.)`  
+   Annualized equivalents of return metrics where applicable.
 
+6. `Dividend metrics`  
+   Includes cumulative dividends, trailing-12M dividends, dividend yield, TTM yield on cost, and lifetime dividend-to-cost ratio.
 
+7. `Dividend schedule metrics`  
+   Includes per-share dividend events, shares held on ex-date, dividend value in currency terms, and FY export support.
 
+## References
+- Return methodology background:  
+  https://www.kitces.com/blog/twr-dwr-irr-calculations-performance-reporting-software-methodology-gips-compliance/

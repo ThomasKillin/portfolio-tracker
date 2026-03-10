@@ -521,7 +521,7 @@ def plot_stock_gain(val, cash_flows, date=None, use_initial_CF=False):
 
 
 
-def plot_stock_gain_plotly(val, cash_flows, date=None, use_initial_CF=False):
+def plot_stock_gain_plotly(val, cash_flows, date=None, use_initial_CF=False, accum=None):
     """
     Plot gain for individual stocks.
     """
@@ -540,6 +540,12 @@ def plot_stock_gain_plotly(val, cash_flows, date=None, use_initial_CF=False):
     for label in plot_labels:
         time_weighted_return = (calc.time_weighted_return(val[label], cash_flows, date=date, 
                                                           use_initial_CF=use_initial_CF) * 100)[label]
+        if accum is not None and isinstance(accum, pd.DataFrame) and label in accum.columns:
+            acc_series = pd.to_numeric(accum[label], errors="coerce").fillna(0.0)
+            active_idx = acc_series[acc_series > 1e-12].index
+            if len(active_idx) > 0 and float(acc_series.iloc[-1]) <= 1e-12:
+                cutoff = active_idx[-1]
+                time_weighted_return = time_weighted_return.loc[:cutoff]
         fig1.add_trace(go.Scatter(
             #x=val.index.strftime("%Y-%m-%d %H:%M:%S").tolist(),
             x = time_weighted_return.index,
