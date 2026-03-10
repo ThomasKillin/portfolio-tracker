@@ -186,7 +186,11 @@ def get_userdata(filename):
             raw[optional_col] = 0.0
 
     import_a = raw[["Company", "Date", "Shares", "Price", "Brokerage", "Adjustments"]].copy()
-    import_a["Company"] = import_a["Company"].astype(str).str.strip()
+    # Normalize ticker text and drop invalid placeholders before any str-cast side effects.
+    import_a["Company"] = import_a["Company"].astype("string").str.strip()
+    import_a["Company"] = import_a["Company"].replace(
+        {"": pd.NA, "nan": pd.NA, "NaN": pd.NA, "None": pd.NA, "null": pd.NA}
+    )
     import_a["Date"] = pd.to_datetime(import_a["Date"], dayfirst=True, errors="coerce")
     import_a = import_a.dropna(subset=["Company", "Date"]).dropna(how="all")
 
@@ -274,8 +278,17 @@ def merge_pricedata(portfolio, index):
     fetched_tickers = []
     failed_tickers = {}
 
-    # Extract list of portfolio tickers
-    tickers = list(dict.fromkeys(list(portfolio.columns.levels[1]) + [index]))
+    # Extract and sanitize ticker list (guard against NaN/blank labels leaking from columns).
+    raw_tickers = list(portfolio.columns.get_level_values("Company").unique()) + [index]
+    tickers = []
+    for t in raw_tickers:
+        if pd.isna(t):
+            continue
+        ts = str(t).strip()
+        if not ts or ts.lower() == "nan":
+            continue
+        if ts not in tickers:
+            tickers.append(ts)
     if not tickers:
         return portfolio
 
@@ -413,45 +426,87 @@ def process_data(portfolio):
             + ". Price provider may have returned no market data."
         )
 
-    # Tickers from the portfolio and including the index
+    # Tickers from user transactions (do not assume every ticker has fetched price/dividend columns).
     portfolio_cols = portfolio["Shares"].columns
-    # Handle Na values.
-    portfolio["$"] = portfolio["$"].ffill().fillna(0)
-    fill_params = ["Shares", "Price", "Div"]
-    if "Brokerage" in available_params:
-        fill_params.append("Brokerage")
-    portfolio.loc[:, idx[fill_params, :]] = portfolio.loc[
-        :, idx[fill_params, :]
-    ].fillna(0)
+    # Align parameter blocks; keep benchmark-only market columns in "$"/"Div".
+    market_cols_all = pd.Index(portfolio["$"].columns).union(portfolio_cols)
+    price_market_all = portfolio["$"].reindex(columns=market_cols_all).ffill().fillna(0)
+    div_all = portfolio["Div"].reindex(columns=market_cols_all).fillna(0)
+    price_market = price_market_all.reindex(columns=portfolio_cols).fillna(0)
+    shares_df = portfolio["Shares"].reindex(columns=portfolio_cols).fillna(0)
+    price_txn = portfolio["Price"].reindex(columns=portfolio_cols).fillna(0)
+    div_df = div_all.reindex(columns=portfolio_cols).fillna(0)
+    brokerage_df = (
+        portfolio["Brokerage"].reindex(columns=portfolio_cols).fillna(0)
+        if "Brokerage" in available_params
+        else pd.DataFrame(0.0, index=portfolio.index, columns=portfolio_cols)
+    )
+    adjustments_df = (
+        portfolio["Adjustments"].reindex(columns=portfolio_cols).fillna(0)
+        if "Adjustments" in available_params
+        else pd.DataFrame(0.0, index=portfolio.index, columns=portfolio_cols)
+    )
+
+    # Replace core parameter blocks with normalized versions to guarantee consistent columns.
+    replace_params = {"$", "Shares", "Price", "Div", "Brokerage", "Adjustments"}
+    keep_mask = ~portfolio.columns.get_level_values("Params").isin(replace_params)
+    portfolio_base = portfolio.loc[:, keep_mask].copy()
+    normalized_blocks = [
+        pd.DataFrame(
+            price_market_all.values,
+            index=portfolio.index,
+            columns=pd.MultiIndex.from_product([["$"], market_cols_all], names=["Params", "Company"]),
+        ),
+        pd.DataFrame(
+            shares_df.values,
+            index=portfolio.index,
+            columns=pd.MultiIndex.from_product([["Shares"], portfolio_cols], names=["Params", "Company"]),
+        ),
+        pd.DataFrame(
+            price_txn.values,
+            index=portfolio.index,
+            columns=pd.MultiIndex.from_product([["Price"], portfolio_cols], names=["Params", "Company"]),
+        ),
+        pd.DataFrame(
+            div_all.values,
+            index=portfolio.index,
+            columns=pd.MultiIndex.from_product([["Div"], market_cols_all], names=["Params", "Company"]),
+        ),
+        pd.DataFrame(
+            brokerage_df.values,
+            index=portfolio.index,
+            columns=pd.MultiIndex.from_product([["Brokerage"], portfolio_cols], names=["Params", "Company"]),
+        ),
+        pd.DataFrame(
+            adjustments_df.values,
+            index=portfolio.index,
+            columns=pd.MultiIndex.from_product([["Adjustments"], portfolio_cols], names=["Params", "Company"]),
+        ),
+    ]
+    portfolio = pd.concat([portfolio_base] + normalized_blocks, axis=1)
     # Accumulated shares
     Accum = (
-        portfolio["Shares"][~np.isnan(portfolio["Shares"])].cumsum().ffill().fillna(0)
+        shares_df[~np.isnan(shares_df)].cumsum().ffill().fillna(0)
     )
     Accum.columns = pd.MultiIndex.from_product(
         [["Accum"], portfolio_cols], names=["Params", "Company"]
     )
     # Current val of each stock holding
-    Val = portfolio["$"] * Accum
+    Val = price_market * Accum.droplevel("Params", axis=1)
     # Cash flows into portfolio
-    Buy_amt = (portfolio["Price"] * portfolio["Shares"]).fillna(0)
-    if "Brokerage" in portfolio.columns:
-        Buy_amt = Buy_amt + portfolio["Brokerage"][portfolio_cols].fillna(0)
+    Buy_amt = (price_txn * shares_df).fillna(0)
+    Buy_amt = Buy_amt + brokerage_df
     # Dividend series (used directly when no adjustment column exists)
-    Div = portfolio["Div"][portfolio_cols]
+    Div = div_df
 
-    if "Adjustments" in portfolio.columns:
+    if "Adjustments" in available_params:
 
         # Cash flow adjustments due to demerger/acquisition event.
-        portfolio.loc[:, idx["Adjustments", :]] = portfolio.loc[
-            :, idx["Adjustments", :]
-        ].fillna(0)
-        # Use .loc for Adjustments to maintain the multiindex columns
-        Buy_amt = Buy_amt + portfolio.loc[:, idx["Adjustments", :]] * Buy_amt.cumsum()
+        Buy_amt = Buy_amt + adjustments_df * Buy_amt.cumsum()
         # For use in div_tot calc.
         Div = (
-            portfolio["Div"][portfolio_cols]
-            + portfolio["Adjustments"][portfolio_cols]
-            * portfolio["Div"][portfolio_cols].cumsum()
+            div_df
+            + adjustments_df * div_df.cumsum()
         )
 
     # Keep company-only dividend columns for Div_tot calculation
@@ -704,7 +759,8 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
     df["Current Price"] = price.iloc[-1]
     df["Current Holdings"] = accum.iloc[-1]
     df["Current Value"] = val.iloc[-1]
-    daily_base = calc.daily_pct_gain(price_all.drop(labels=index, axis=1, errors="ignore")).ffill()
+    # Keep daily returns for all held tickers, even if one is also selected as benchmark.
+    daily_base = calc.daily_pct_gain(price_all).ffill()
     if isinstance(daily_base, pd.DataFrame) and not daily_base.empty:
         df["Daily Return (%)"] = daily_base.iloc[-1] * 100
     elif isinstance(daily_base, pd.Series) and not daily_base.empty:
