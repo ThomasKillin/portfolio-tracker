@@ -344,6 +344,7 @@ def merge_pricedata(portfolio, index):
                 failed_tickers[i] = "no rows returned"
                 print(f"Warning: no data returned for {i}. Skipping...")
                 continue
+            inputdata = inputdata.copy()
 
             if "Close" not in inputdata.columns:
                 failed_tickers[i] = "missing Close column"
@@ -811,10 +812,10 @@ def stock_summary(portfolio, index, date=None, styles=True, calc_method="basic",
         years = calc._elapsed_years_from_first_nonzero(vs).iloc[-1]
         adw = (np.power(1 + dw, 1 / years) - 1) if years > 0 else 0.0
         return (
-            float(t.iloc[-1]),
-            float(a.iloc[-1]),
-            float(tw.iloc[-1]),
-            float(atw.iloc[-1]),
+            _last_scalar(t),
+            _last_scalar(a),
+            _last_scalar(tw),
+            _last_scalar(atw),
             float(dw),
             float(adw),
         )

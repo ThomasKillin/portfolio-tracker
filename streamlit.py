@@ -25,6 +25,30 @@ indices = tuple(['Enter manually'] + list(indices['Symbol'] + ': ' + indices['Na
 currencies = pd.read_csv('currencies.csv')
 currencies = tuple(['Enter manually'] + list(currencies['Symbol'] + ': ' + currencies['Name']))
 
+
+def _render_dataframe(data, stretch=True, **kwargs):
+    """
+    Streamlit compatibility wrapper:
+    - Newer versions: width='stretch'
+    - Older versions: use_container_width=True
+    """
+    if stretch:
+        try:
+            return st.dataframe(data, width="stretch", **kwargs)
+        except TypeError:
+            return st.dataframe(data, use_container_width=True, **kwargs)
+    return st.dataframe(data, **kwargs)
+
+
+def _render_plotly(fig, stretch=True, **kwargs):
+    if stretch:
+        try:
+            return st.plotly_chart(fig, width="stretch", **kwargs)
+        except TypeError:
+            return st.plotly_chart(fig, use_container_width=True, **kwargs)
+    return st.plotly_chart(fig, **kwargs)
+
+
 def get_data(file, index):
     """
     Get stock data using the configured data provider.
@@ -128,6 +152,10 @@ def process_data(merged_portfolio, target_currency):
 
     st.session_state['portfolio'] = portfolio
     st.session_state["portfolio_version"] = st.session_state.get("portfolio_version", 0) + 1
+    # New dataset loaded: reset date controls to the new portfolio start.
+    new_start = pd.Timestamp(portfolio.index.min())
+    st.session_state["start_date"] = new_start
+    st.session_state["reset_start_date_input"] = True
     st.session_state.pop("render_cache", None)
     st.session_state.pop("render_cache_key", None)
     return True
@@ -566,21 +594,21 @@ def display_data():
                 scope_fig_total = scope_figs[scope_key]["total"]
 
             if show_total_return:
-                st.plotly_chart(scope_fig_total)
-                st.dataframe(summary_total, use_container_width=True)
+                _render_plotly(scope_fig_total)
+                _render_dataframe(summary_total)
             else:
-                st.plotly_chart(scope_fig_basic)
-                st.dataframe(summary_basic, use_container_width=True)
+                _render_plotly(scope_fig_basic)
+                _render_dataframe(summary_basic)
         
         with tab2:
-            st.plotly_chart(fig3)
+            _render_plotly(fig3)
         
         with tab3:
             col1, col2 = st.columns([1, 1])
             with col1:
-                st.plotly_chart(fig4)
+                _render_plotly(fig4)
             with col2:    
-                st.plotly_chart(fig5)
+                _render_plotly(fig5)
 
         with tab4:
             div_cash = div.loc[st.session_state['start_date']:].fillna(0)
@@ -672,7 +700,7 @@ def display_data():
                     )
                     .highlight_null(props="background-color: transparent; color: inherit;")
                 )
-                st.dataframe(styled_div_summary, use_container_width=True)
+                _render_dataframe(styled_div_summary)
 
                 div_options = ["TOTAL"] + sorted(list(div_cash.columns))
                 if (
@@ -702,9 +730,9 @@ def display_data():
 
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.plotly_chart(fig_div_cum, use_container_width=True)
+                    _render_plotly(fig_div_cum)
                 with c2:
-                    st.plotly_chart(fig_div_annual, use_container_width=True)
+                    _render_plotly(fig_div_annual)
 
         with tab5:
             tickers = sorted(list(val.columns))
@@ -790,7 +818,7 @@ def display_data():
                         }
                     )
                     st.markdown("##### Dividend Schedule Summary")
-                    st.dataframe(styled_schedule_summary, use_container_width=True)
+                    _render_dataframe(styled_schedule_summary)
 
                 if not upcoming_df.empty:
                     if (
@@ -807,13 +835,12 @@ def display_data():
                             upcoming_view["Upcoming Payment Date"], errors="coerce"
                         ).dt.date
                     st.markdown("##### Upcoming Dividends")
-                    st.dataframe(
+                    _render_dataframe(
                         upcoming_view.style.format(
                             {
                                 "Days to Ex-Div": "{:.0f}",
                             }
-                        ),
-                        use_container_width=True,
+                        )
                     )
 
                 if not schedule_df.empty:
@@ -873,7 +900,7 @@ def display_data():
                     else:
                         schedule_view = schedule_view.drop(columns=["Payment Date"])
                     st.markdown("##### Dividend Events")
-                    st.dataframe(
+                    _render_dataframe(
                         schedule_view.style.format(
                             {
                                 "Dividend ($/share)": "{:.4f}",
@@ -881,8 +908,7 @@ def display_data():
                                 "Dividend Value ($)": "{:.2f}",
                                 "Cumulative Dividends ($/share)": "{:.4f}",
                             }
-                        ),
-                        use_container_width=True,
+                        )
                     )
 
         with tab6:
@@ -896,7 +922,7 @@ def display_data():
                     "Failed Tickers": len(provider_diag.get("failed", {})),
                 }
             ]
-            st.dataframe(pd.DataFrame(provider_rows), use_container_width=True)
+            _render_dataframe(pd.DataFrame(provider_rows))
 
             failed_map = provider_diag.get("failed", {})
             if failed_map:
@@ -904,7 +930,7 @@ def display_data():
                     [{"Ticker": k, "Reason": v} for k, v in failed_map.items()]
                 ).sort_values("Ticker")
                 st.markdown("##### Provider Failures")
-                st.dataframe(failed_df, use_container_width=True)
+                _render_dataframe(failed_df)
 
             st.markdown("##### FX Conversion Status")
             fx_diag = st.session_state.get("fx_diagnostics", {})
@@ -919,7 +945,7 @@ def display_data():
                 )
             if not fx_rows:
                 fx_rows = [{"FX Pair": "All attempted pairs", "Status": "OK", "Tickers": ""}]
-            st.dataframe(pd.DataFrame(fx_rows), use_container_width=True)
+            _render_dataframe(pd.DataFrame(fx_rows))
 
             unknown_tickers = fx_diag.get("unknown_currency_tickers", [])
             if unknown_tickers:
@@ -937,7 +963,7 @@ def display_data():
                     }
                 ]
             )
-            st.dataframe(bench_diag, use_container_width=True)
+            _render_dataframe(bench_diag)
 
         display_calc_details()
             
@@ -1018,6 +1044,8 @@ with st.sidebar:
  
                      
     if 'portfolio' in st.session_state:
+        if st.session_state.pop("reset_start_date_input", False):
+            st.session_state.pop("start_date_input", None)
         min_ts = pd.Timestamp(st.session_state['portfolio'].index[0])
         max_ts = pd.Timestamp(
             st.session_state['portfolio'].index[-2]
