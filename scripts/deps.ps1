@@ -22,6 +22,6 @@ switch ($Task) {
     "check" {
         python -m pip check
         python -m unittest -q
-        python -m py_compile streamlit.py share_tracking.py graphs.py performance_calcs.py
+        python -m py_compile streamlit_app.py share_tracking.py graphs.py performance_calcs.py
     }
 }

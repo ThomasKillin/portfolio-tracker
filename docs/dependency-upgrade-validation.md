@@ -16,14 +16,14 @@ Date: 2026-03-07
 ## Validation Commands
 - `python -m pip check`
 - `python -m unittest -q`
-- `python -m py_compile streamlit.py share_tracking.py graphs.py performance_calcs.py`
+- `python -m py_compile streamlit_app.py share_tracking.py graphs.py performance_calcs.py`
 - `python asx_data_probe.py --tickers BHP.AX CBA.AX WES.AX STW.AX VAS.AX`
 
 ## Validation Results
 - `pip check`: passed
 - unit tests: passed (`Ran 16 tests`)
 - py_compile: passed
-- Streamlit smoke startup (`streamlit.exe run streamlit.py --server.headless true`): process started successfully (terminated via timeout in automated check)
+- Streamlit smoke startup (`streamlit.exe run streamlit_app.py --server.headless true`): process started successfully (terminated via timeout in automated check)
 - ASX probe:
   - `BHP.AX`, `CBA.AX`, `WES.AX` meet 20y target
   - `STW.AX`, `VAS.AX` do not meet 20y target due listing age

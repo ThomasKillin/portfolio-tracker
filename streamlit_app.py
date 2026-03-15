@@ -92,7 +92,7 @@ def get_data(file, index):
     return merged_portfolio
             
 
-def process_data(merged_portfolio, target_currency):
+def process_data(merged_portfolio, target_currency, selected_index=None):
     
     # Perform initial processing of portfolio data
     try:
@@ -100,8 +100,8 @@ def process_data(merged_portfolio, target_currency):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", RuntimeWarning)
             portfolio = share.convert_currency(portfolio, target_currency=target_currency)
-    except ValueError as exc:
-        st.error(str(exc))
+    except Exception as exc:
+        st.error(f"Data processing failed ({type(exc).__name__}: {exc})")
         return False
 
     fx_warnings = []
@@ -152,6 +152,8 @@ def process_data(merged_portfolio, target_currency):
 
     st.session_state['portfolio'] = portfolio
     st.session_state["portfolio_version"] = st.session_state.get("portfolio_version", 0) + 1
+    if selected_index:
+        st.session_state["loaded_benchmark"] = selected_index
     # New dataset loaded: reset date controls to the new portfolio start.
     new_start = pd.Timestamp(portfolio.index.min())
     st.session_state["start_date"] = new_start
@@ -401,37 +403,48 @@ def display_data():
         if 'start_date' not in st.session_state:
             st.session_state['start_date'] = st.session_state['portfolio'].index[0]
 
+        benchmark_ticker = st.session_state.get("loaded_benchmark", index)
         portfolio_version = st.session_state.get("portfolio_version", 0)
         render_key = (
+            "subtitle_v2",
             portfolio_version,
             str(st.session_state['start_date']),
-            index,
+            benchmark_ticker,
         )
+        subtitle_text = f"{pd.Timestamp(st.session_state['start_date']).date()} - present"
         if st.session_state.get("render_cache_key") != render_key:
             try:
                 # Extract variables for performance calculations
                 val, cash_flows, price, accum, shares, div, div_ = share.extract_parameters(st.session_state['portfolio'])
                 fx_rates = st.session_state['portfolio'].attrs.get("fx_rates")
-                benchmark_available = index in price.columns
-                benchmark_price = price[index] if benchmark_available else pd.Series(1.0, index=price.index, name=index)
-                benchmark_div = div_[index] if benchmark_available and index in div_.columns else pd.Series(0.0, index=price.index, name=index)
+                benchmark_available = benchmark_ticker in price.columns
+                benchmark_price = (
+                    price[benchmark_ticker]
+                    if benchmark_available
+                    else pd.Series(1.0, index=price.index, name=benchmark_ticker)
+                )
+                benchmark_div = (
+                    div_[benchmark_ticker]
+                    if benchmark_available and benchmark_ticker in div_.columns
+                    else pd.Series(0.0, index=price.index, name=benchmark_ticker)
+                )
                 fx_return_total = _build_fx_return_series(val, fx_rates)
 
                 if not benchmark_available:
                     st.warning(
-                        f"Benchmark ticker '{index}' was not found in downloaded price data. "
+                        f"Benchmark ticker '{benchmark_ticker}' was not found in downloaded price data. "
                         "Benchmark comparisons are temporarily disabled for this render."
                     )
 
                 summary_basic = share.stock_summary(
                     st.session_state['portfolio'],
-                    index,
+                    benchmark_ticker,
                     date=st.session_state['start_date'],
                     calc_method='basic',
                 )
                 summary_total = share.stock_summary(
                     st.session_state['portfolio'],
-                    index,
+                    benchmark_ticker,
                     date=st.session_state['start_date'],
                     calc_method='total',
                 )
@@ -442,6 +455,7 @@ def display_data():
                     date=st.session_state['start_date'],
                     calc_method='basic',
                     fx_return=fx_return_total,
+                    subtitle_text=subtitle_text,
                 )
                 fig2 = graph.plot_portfolio_gain_plotly(
                     val, cash_flows, benchmark_price,
@@ -449,15 +463,24 @@ def display_data():
                     date=st.session_state['start_date'],
                     calc_method='total',
                     fx_return=fx_return_total,
+                    subtitle_text=subtitle_text,
                 )
                 fig3 = graph.plot_stock_gain_plotly(
-                    val, cash_flows, date=st.session_state['start_date'], accum=accum
+                    val,
+                    cash_flows,
+                    date=st.session_state['start_date'],
+                    accum=accum,
+                    subtitle_text=subtitle_text,
                 )
                 fig4 = graph.plot_stock_holdings_plotly(
                     val, date=st.session_state['start_date']
                 )
                 fig5 = graph.plot_annualised_return_plotly_(
-                    val, cash_flows, benchmark_price, date=st.session_state['start_date']
+                    val,
+                    cash_flows,
+                    benchmark_price,
+                    date=st.session_state['start_date'],
+                    subtitle_text=subtitle_text,
                 )
 
                 st.session_state["render_cache"] = {
@@ -477,7 +500,7 @@ def display_data():
                     "fig4": fig4,
                     "fig5": fig5,
                     "benchmark_status": {
-                        "selected": index,
+                        "selected": benchmark_ticker,
                         "available": bool(benchmark_available),
                     },
                     "scope_figs": {},
@@ -509,7 +532,7 @@ def display_data():
         fig3 = cache["fig3"]
         fig4 = cache["fig4"]
         fig5 = cache["fig5"]
-        benchmark_status = cache.get("benchmark_status", {"selected": index, "available": False})
+        benchmark_status = cache.get("benchmark_status", {"selected": benchmark_ticker, "available": False})
         summary_basic = cache["summary_basic"]
         summary_total = cache["summary_total"]
         
@@ -542,7 +565,7 @@ def display_data():
                 scope_fig_basic = fig1
                 scope_fig_total = fig2
             else:
-                scope_key = (chart_scope, str(st.session_state['start_date']), index)
+                scope_key = (chart_scope, str(st.session_state['start_date']), benchmark_ticker)
                 scope_figs = cache.get("scope_figs", {})
                 if scope_key not in scope_figs:
                     val_scope = val[[chart_scope]]
@@ -559,10 +582,14 @@ def display_data():
                         cf_scope = cf_scope.loc[:cutoff]
                         div_scope = div_scope.loc[:cutoff]
                     benchmark_price = (
-                        price[index] if index in price.columns else pd.Series(1.0, index=price.index, name=index)
+                        price[benchmark_ticker]
+                        if benchmark_ticker in price.columns
+                        else pd.Series(1.0, index=price.index, name=benchmark_ticker)
                     )
                     benchmark_div = (
-                        div_[index] if index in div_.columns else pd.Series(0.0, index=price.index, name=index)
+                        div_[benchmark_ticker]
+                        if benchmark_ticker in div_.columns
+                        else pd.Series(0.0, index=price.index, name=benchmark_ticker)
                     )
                     if len(active_idx) > 0 and float(acc_series.iloc[-1]) <= 1e-12:
                         benchmark_price = benchmark_price.loc[:cutoff]
@@ -577,6 +604,7 @@ def display_data():
                             date=st.session_state['start_date'],
                             calc_method='basic',
                             fx_return=_build_fx_return_series(val_scope, fx_rates, scope=chart_scope),
+                            subtitle_text=subtitle_text,
                         ),
                         "total": graph.plot_portfolio_gain_plotly(
                             val_scope,
@@ -587,6 +615,7 @@ def display_data():
                             date=st.session_state['start_date'],
                             calc_method='total',
                             fx_return=_build_fx_return_series(val_scope, fx_rates, scope=chart_scope),
+                            subtitle_text=subtitle_text,
                         ),
                     }
                     cache["scope_figs"] = scope_figs
@@ -595,9 +624,13 @@ def display_data():
 
             if show_total_return:
                 _render_plotly(scope_fig_total)
+                st.markdown("##### Summary Table")
+                st.caption(subtitle_text)
                 _render_dataframe(summary_total)
             else:
                 _render_plotly(scope_fig_basic)
+                st.markdown("##### Summary Table")
+                st.caption(subtitle_text)
                 _render_dataframe(summary_basic)
         
         with tab2:
@@ -700,6 +733,8 @@ def display_data():
                     )
                     .highlight_null(props="background-color: transparent; color: inherit;")
                 )
+                st.markdown("##### Summary Table")
+                st.caption(subtitle_text)
                 _render_dataframe(styled_div_summary)
 
                 div_options = ["TOTAL"] + sorted(list(div_cash.columns))
@@ -717,7 +752,7 @@ def display_data():
 
                 try:
                     fig_div_cum, fig_div_annual = graph.plot_dividend_metrics_plotly(
-                        div_cash, selection=div_selection
+                        div_cash, selection=div_selection, subtitle_text=subtitle_text
                     )
                 except Exception as exc:
                     st.error(
@@ -725,7 +760,7 @@ def display_data():
                         f"{type(exc).__name__}: {exc}"
                     )
                     fig_div_cum, fig_div_annual = graph.plot_dividend_metrics_plotly(
-                        div_cash, selection="TOTAL"
+                        div_cash, selection="TOTAL", subtitle_text=subtitle_text
                     )
 
                 c1, c2 = st.columns(2)
@@ -818,6 +853,7 @@ def display_data():
                         }
                     )
                     st.markdown("##### Dividend Schedule Summary")
+                    st.caption(subtitle_text)
                     _render_dataframe(styled_schedule_summary)
 
                 if not upcoming_df.empty:
@@ -835,6 +871,7 @@ def display_data():
                             upcoming_view["Upcoming Payment Date"], errors="coerce"
                         ).dt.date
                     st.markdown("##### Upcoming Dividends")
+                    st.caption(subtitle_text)
                     _render_dataframe(
                         upcoming_view.style.format(
                             {
@@ -900,6 +937,7 @@ def display_data():
                     else:
                         schedule_view = schedule_view.drop(columns=["Payment Date"])
                     st.markdown("##### Dividend Events")
+                    st.caption(subtitle_text)
                     _render_dataframe(
                         schedule_view.style.format(
                             {
@@ -977,12 +1015,16 @@ def get_and_display_data(file, index, target_currency):
     
     if 'portfolio' in st.session_state:     
         merged_portfolio = get_data(file=file, index=index)
-        if process_data(merged_portfolio, target_currency=target_currency):
+        if process_data(merged_portfolio, target_currency=target_currency, selected_index=index):
             display_data()
 
 
 # Get index and csv file
 with st.sidebar:
+    default_index_symbol = indices[1].split(":")[0] if len(indices) > 1 else "^GSPC"
+    if "active_benchmark" not in st.session_state:
+        st.session_state["active_benchmark"] = default_index_symbol
+
     # Select a stock index
     index_select = st.selectbox(':chart_with_upwards_trend: Enter the stock index to compare to', 
                                 indices,
@@ -998,10 +1040,15 @@ with st.sidebar:
                                 Total return will be the same as Price return""")
     
     if index_select == 'Enter manually':
-        index = st.text_input('Input stock ticker')    
+        manual_index = st.text_input('Input stock ticker', key='manual_index_input')
+        manual_index = (manual_index or "").strip().upper()
+        if manual_index:
+            st.session_state["active_benchmark"] = manual_index
+        index = st.session_state.get("active_benchmark", default_index_symbol)
     else:
         # Extract the ticker from the string
-        index = index_select.split(':')[0]   
+        index = index_select.split(':')[0].strip()
+        st.session_state["active_benchmark"] = index
         
     base_currency = st.selectbox(':dollar: Select Base Currency', 
                                  currencies, 
@@ -1010,10 +1057,15 @@ with st.sidebar:
                                  help='Select the base currency for the portfolio') 
     
     if base_currency == 'Enter manually':
-        base_currency = st.text_input('Input stock ticker')    
+        manual_currency = st.text_input('Input currency code', key='manual_currency_input')
+        manual_currency = (manual_currency or "").strip().upper()
+        if manual_currency:
+            st.session_state["active_base_currency"] = manual_currency
+        base_currency = st.session_state.get("active_base_currency", "AUD")
     else:
         # Extract the ticker from the string
-        base_currency = base_currency.split(':')[0]
+        base_currency = base_currency.split(':')[0].strip()
+        st.session_state["active_base_currency"] = base_currency
                          
     #st.session_state['index'] = index
     file = st.file_uploader(':open_file_folder: Select the stock portfolio data in csv format', 
@@ -1044,36 +1096,70 @@ with st.sidebar:
  
                      
     if 'portfolio' in st.session_state:
-        if st.session_state.pop("reset_start_date_input", False):
-            st.session_state.pop("start_date_input", None)
-        min_ts = pd.Timestamp(st.session_state['portfolio'].index[0])
-        max_ts = pd.Timestamp(
-            st.session_state['portfolio'].index[-2]
-            if len(st.session_state['portfolio'].index) > 1
-            else st.session_state['portfolio'].index[-1]
-        )
-        default_start_ts = pd.Timestamp(st.session_state.get('start_date', min_ts))
-        if default_start_ts < min_ts:
-            default_start_ts = min_ts
-        if default_start_ts > max_ts:
-            default_start_ts = max_ts
-        selected_date = st.date_input(
-            ':date: Select start date',
-            min_value=min_ts.date(),
-            max_value=max_ts.date(),
-            value=default_start_ts.date(),
-            key='start_date_input',
-        )
-        st.session_state['start_date'] = pd.Timestamp(selected_date)
+        try:
+            _ = st.session_state.pop("reset_start_date_input", False)
+            portfolio_version = st.session_state.get("portfolio_version", 0)
+            start_date_key = f"start_date_input_{portfolio_version}"
+            min_ts = pd.Timestamp(st.session_state['portfolio'].index[0])
+            max_ts = pd.Timestamp(
+                st.session_state['portfolio'].index[-2]
+                if len(st.session_state['portfolio'].index) > 1
+                else st.session_state['portfolio'].index[-1]
+            )
+            default_start_ts = pd.Timestamp(st.session_state.get('start_date', min_ts))
+            if default_start_ts < min_ts:
+                default_start_ts = min_ts
+            if default_start_ts > max_ts:
+                default_start_ts = max_ts
+            selected_date = st.date_input(
+                ':date: Select start date',
+                min_value=min_ts.date(),
+                max_value=max_ts.date(),
+                value=default_start_ts.date(),
+                key=start_date_key,
+            )
+            st.session_state['start_date'] = pd.Timestamp(selected_date)
+        except Exception as exc:
+            st.warning(f"Start-date control unavailable for current session data ({type(exc).__name__}).")
         
 
 # If button clicked, refresh market data into session state.
 if button:
-    merged_portfolio = get_data(file=file, index=index)
-    process_data(merged_portfolio=merged_portfolio, target_currency=base_currency)
+    previous_portfolio = st.session_state.get("portfolio")
+    previous_version = st.session_state.get("portfolio_version", 0)
+    previous_loaded_benchmark = st.session_state.get("loaded_benchmark")
+    try:
+        merged_portfolio = get_data(file=file, index=index)
+        load_ok = process_data(
+            merged_portfolio=merged_portfolio,
+            target_currency=base_currency,
+            selected_index=index,
+        )
+        if not load_ok:
+            if previous_portfolio is not None:
+                st.session_state["portfolio"] = previous_portfolio
+                st.session_state["portfolio_version"] = previous_version
+                if previous_loaded_benchmark is not None:
+                    st.session_state["loaded_benchmark"] = previous_loaded_benchmark
+                st.warning("Refresh failed. Showing last successfully loaded portfolio.")
+        else:
+            # Rebuild sidebar widgets (especially date_input bounds/value) from new portfolio state.
+            st.rerun()
+    except Exception as exc:
+        st.error(f"Refresh failed ({type(exc).__name__}: {exc})")
+        if previous_portfolio is not None:
+            st.session_state["portfolio"] = previous_portfolio
+            st.session_state["portfolio_version"] = previous_version
+            if previous_loaded_benchmark is not None:
+                st.session_state["loaded_benchmark"] = previous_loaded_benchmark
+            st.warning("Showing last successfully loaded portfolio.")
 
 # Always render portfolio view when already loaded in session state.
 if 'portfolio' in st.session_state:
-    display_data()
+    try:
+        display_data()
+    except Exception as exc:
+        st.error(f"Render failed ({type(exc).__name__}: {exc})")
+        st.warning("The previous data remains loaded. Try changing inputs and reloading share price data.")
 else:
     display_readme()

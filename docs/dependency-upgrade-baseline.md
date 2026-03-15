@@ -12,7 +12,7 @@ Captured on: 2026-03-07 (Australia/Sydney)
 - `python -m pip check`
 - `python -m unittest -q`
 - Streamlit smoke startup command:
-  - `streamlit run streamlit.py --server.headless true --server.port 8509`
+  - `streamlit run streamlit_app.py --server.headless true --server.port 8509`
 
 ## Baseline Results
 - `pip check`: passed (no broken requirements)

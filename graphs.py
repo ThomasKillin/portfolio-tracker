@@ -7,6 +7,16 @@ from plotly.subplots import make_subplots
 import plotly.express as px
 
 
+def _title_with_subtitle(title_text, subtitle_text=None, title_bold=True, subtitle_size=15):
+    title_part = f"<b>{title_text}</b>" if title_bold else title_text
+    if not subtitle_text:
+        return title_part
+    return (
+        f"{title_part}"
+        f"<br><span style='font-size:{subtitle_size}px;font-weight:normal;'>{subtitle_text}</span>"
+    )
+
+
 #### PLOT PORTFOLIO PERFORMANCE
 # PLOT % GAIN
 #stock_tickers_selection = stocks
@@ -135,7 +145,18 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, date=None
     return fig
 """
 
-def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div=None, date=None, calc_method='basic', add_toggle=False, fx_return=None):
+def plot_portfolio_gain_plotly(
+    val,
+    cash_flows,
+    index_price,
+    div=None,
+    index_div=None,
+    date=None,
+    calc_method='basic',
+    add_toggle=False,
+    fx_return=None,
+    subtitle_text=None,
+):
     
     init_CF = (val.shape == val[date:].shape)
     
@@ -184,12 +205,18 @@ def plot_portfolio_gain_plotly(val, cash_flows, index_price, div=None, index_div
     plot_index = val.loc[date:].index if date is not None else val.index
 
     if calc_method == 'basic':
-        plot_titles = ("<b>Price return", "<b>Total Portfolio Value")
+        plot_titles = (
+            _title_with_subtitle("Price return", subtitle_text=subtitle_text, title_bold=True, subtitle_size=15),
+            "<b>Total Portfolio Value</b>",
+        )
         portfolio_val = val.sum(axis=1) / 1000
         price_only_val = portfolio_val
         div_only_val = pd.Series(0, index=val.index)
     else:
-        plot_titles = ("<b>Total Shareholder Return", "<b>Total Portfolio Value + accumulated dividends ")
+        plot_titles = (
+            _title_with_subtitle("Total Shareholder Return", subtitle_text=subtitle_text, title_bold=True, subtitle_size=15),
+            "<b>Total Portfolio Value + accumulated dividends</b>",
+        )
         price_only_val = val.sum(axis=1) / 1000
         div_only_val = div.cumsum().sum(axis=1) / 1000
         portfolio_val = price_only_val + div_only_val
@@ -418,7 +445,7 @@ def plot_portfolio_gain_plotly_(val, cash_flows, index_price, date=None):
     return fig
 
 
-def plot_dividend_metrics_plotly(div_cash, selection="TOTAL"):
+def plot_dividend_metrics_plotly(div_cash, selection="TOTAL", subtitle_text=None):
     """
     Build dividend-focused charts:
     1) cumulative total dividends over time
@@ -447,7 +474,12 @@ def plot_dividend_metrics_plotly(div_cash, selection="TOTAL"):
         )
     )
     fig_div_cum.update_layout(
-        title=f"<b>Cumulative Dividends{title_suffix}</b>",
+        title=_title_with_subtitle(
+            f"Cumulative Dividends{title_suffix}",
+            subtitle_text=subtitle_text,
+            title_bold=True,
+            subtitle_size=15,
+        ),
         xaxis_title="Date",
         yaxis_title="Dividends ($)",
         height=380,
@@ -465,7 +497,12 @@ def plot_dividend_metrics_plotly(div_cash, selection="TOTAL"):
         )
     )
     fig_div_annual.update_layout(
-        title=f"<b>Annual Dividends{title_suffix}</b>",
+        title=_title_with_subtitle(
+            f"Annual Dividends{title_suffix}",
+            subtitle_text=subtitle_text,
+            title_bold=True,
+            subtitle_size=15,
+        ),
         xaxis_title="Date",
         yaxis_title="Dividends ($)",
         height=380,
@@ -521,7 +558,7 @@ def plot_stock_gain(val, cash_flows, date=None, use_initial_CF=False):
 
 
 
-def plot_stock_gain_plotly(val, cash_flows, date=None, use_initial_CF=False, accum=None):
+def plot_stock_gain_plotly(val, cash_flows, date=None, use_initial_CF=False, accum=None, subtitle_text=None):
     """
     Plot gain for individual stocks.
     """
@@ -572,13 +609,21 @@ def plot_stock_gain_plotly(val, cash_flows, date=None, use_initial_CF=False, acc
     #)
     
     # Set plot properties
+    stock_title = "<b>Stock Gain</b>"
+    if subtitle_text:
+        stock_title += (
+            "<br><span style='font-size:15px;font-weight:normal;'>"
+            + str(subtitle_text)
+            + "</span>"
+        )
     fig1.update_layout(
         width=1400,
         height=550,
         title={
-            'text': 'Stock Gain',
+            'text': stock_title,
             'x': 0.5,
-            'y': 0.9,
+            'xref': 'paper',
+            'y': 0.95,
             'xanchor': 'center',
             'yanchor': 'top',
             'font': dict(color='slategrey',
@@ -597,6 +642,7 @@ def plot_stock_gain_plotly(val, cash_flows, date=None, use_initial_CF=False, acc
             showgrid=True,
             visible=True
         ),
+        margin=dict(l=50, r=30, t=85, b=50),
         #plot_bgcolor='lightgray'
     )
     
@@ -755,7 +801,7 @@ def plot_annualised_return_plotly(val, cash_flows, index_price, date=None, use_i
 
     return fig
 
-def plot_annualised_return_plotly_(val, cash_flows, index_price, date=None, use_initial_CF=False):
+def plot_annualised_return_plotly_(val, cash_flows, index_price, date=None, use_initial_CF=False, subtitle_text=None):
     
     br = (calc.basic_return_annualised(val, cash_flows, date=date, 
                                        use_initial_CF=use_initial_CF).iloc[-1] * 100)
@@ -795,13 +841,23 @@ def plot_annualised_return_plotly_(val, cash_flows, index_price, date=None, use_
     #                  showlegend=True, legend=dict(font=dict(size=8)), 
     #                  plot_bgcolor='white', hovermode='x')
     
+    ann_title = "Annualised returns"
+    if subtitle_text:
+        ann_title += (
+            "<br><span style='font-size:15px;font-weight:normal;'>"
+            + str(subtitle_text)
+            + "</span>"
+        )
     fig.update_layout(width=700, 
                       height=550,
-                      title=dict(text='Annualised returns', x=0.5, y=0.9, 
+                      title=dict(
+                          text=ann_title,
+                          x=0.5, xref='paper', y=0.95, 
                                  font=dict(size=20, color='slategrey')), 
                       yaxis_title='Gain (%)', 
                       xaxis_tickangle=-90, xaxis_tickvals=x, xaxis_ticktext=br.index.tolist(), 
-                      showlegend=True)
+                      showlegend=True,
+                      margin=dict(l=50, r=50, t=85, b=50))
                       #legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1))
     
     

@@ -26,11 +26,11 @@ Date: 2026-03-07
 ## Validation Summary
 - `pip check`: passed
 - `python -m unittest -q`: passed
-- `python -m py_compile streamlit.py share_tracking.py graphs.py performance_calcs.py`: passed
+- `python -m py_compile streamlit_app.py share_tracking.py graphs.py performance_calcs.py`: passed
 - `asx_data_probe.py`: Yahoo long-history access validated for major ASX tickers
   - `BHP.AX`, `CBA.AX`, `WES.AX` met 20y target
   - `STW.AX`, `VAS.AX` did not meet 20y because listing history is < 20 years
 
 ## Notable Compatibility Notes
-- `streamlit.py` filename can shadow package import in some `python -m ...` invocation paths.
-  Prefer launching via `streamlit run streamlit.py` (CLI executable) in practice.
+- `streamlit_app.py` avoids package-shadowing risk from naming the app file `streamlit.py`.
+  Preferred launch command is `streamlit run streamlit_app.py`.

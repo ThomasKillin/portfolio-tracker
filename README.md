@@ -8,7 +8,7 @@ Portfolio Tracker compares an equity portfolio against a benchmark and reports p
 - Public Streamlit app: https://portfolio-tracker-pzhgdnwzfrt8lyl4m448ms.streamlit.app/
 
 ## Current status
-- Primary UI: Streamlit (`streamlit.py`)
+- Primary UI: Streamlit (`streamlit_app.py`)
 - Data provider (default): `yfinance`
 - Notebook: `main.ipynb` is available and updated to current `share_tracking` APIs
 
@@ -49,7 +49,7 @@ python -m pip check
 
 ### Streamlit app (recommended)
 ```powershell
-streamlit run streamlit.py
+streamlit run streamlit_app.py
 ```
 
 ### Jupyter notebook (optional)
@@ -97,7 +97,7 @@ Validation:
 ```powershell
 python -m pip check
 python -m unittest -q
-python -m py_compile streamlit.py share_tracking.py graphs.py performance_calcs.py
+python -m py_compile streamlit_app.py share_tracking.py graphs.py performance_calcs.py
 ```
 
 ## Metrics
