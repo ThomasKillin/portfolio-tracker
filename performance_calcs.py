@@ -913,3 +913,183 @@ def dollar_weighted_total_return_endpoint(val, cash_flows, div, date=None, use_i
             endpoints[column] = float(np.power(1 + irr, len(irr_series)) - 1)
 
     return pd.Series(endpoints)
+
+
+def contribution_analysis(
+    val,
+    cash_flows,
+    div,
+    fx_rates=None,
+    date=None,
+    include_total=True,
+):
+    """
+    Compute per-ticker contribution decomposition for a selected period.
+
+    Components:
+    - Price ($)    = local-currency price effect converted to target currency
+    - Dividend ($) = sum(dividend cash over period)
+    - FX ($)       = residual (Total - Price - Dividend)
+    - Total ($)    = end - start - net_cash_flows_ex_start + dividends
+
+    Contribution (%) is Total($) divided by portfolio start value.
+    """
+    val, cash_flows, div = prepare_data(val, cash_flows, div, date=date)
+    if val.empty:
+        return pd.DataFrame(
+            columns=[
+                "Price ($)",
+                "Dividend ($)",
+                "FX ($)",
+                "Total ($)",
+                "Contribution (%)",
+                "Contribution Share of Total (%)",
+            ]
+        )
+
+    tickers = list(val.columns)
+    rows = []
+
+    start_vals = pd.to_numeric(val.iloc[0], errors="coerce").fillna(0.0)
+    start_portfolio_value = float(start_vals.sum())
+    denom = start_portfolio_value if abs(start_portfolio_value) > 1e-12 else np.nan
+
+    for ticker in tickers:
+        v = pd.to_numeric(val[ticker], errors="coerce").fillna(0.0)
+        cf = pd.to_numeric(cash_flows[ticker], errors="coerce").fillna(0.0)
+        dv = pd.to_numeric(div[ticker], errors="coerce").fillna(0.0)
+
+        v_start = float(v.iloc[0])
+        v_end = float(v.iloc[-1])
+        net_cf_ex_start = float(cf.iloc[1:].sum()) if len(cf) > 1 else 0.0
+        dividend_component = float(dv.sum())
+        total_component = v_end - v_start - net_cf_ex_start + dividend_component
+        price_component = v_end - v_start - net_cf_ex_start
+        fx_component = 0.0
+        if isinstance(fx_rates, pd.DataFrame) and ticker in fx_rates.columns:
+            fx_col = pd.to_numeric(fx_rates[ticker], errors="coerce").reindex(v.index).ffill()
+            first_valid = fx_col.first_valid_index()
+            last_valid = fx_col.last_valid_index()
+            if first_valid is not None and last_valid is not None:
+                first_fx = float(fx_col.loc[first_valid])
+                last_fx = float(fx_col.loc[last_valid])
+                if np.isfinite(first_fx) and first_fx != 0 and np.isfinite(last_fx):
+                    # Remove FX to derive local-currency series, compute local price effect,
+                    # then convert back to target-currency and treat FX as residual.
+                    local_v = (v / fx_col.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0)
+                    local_cf = (cf / fx_col.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+                    local_v_start = float(local_v.iloc[0])
+                    local_v_end = float(local_v.iloc[-1])
+                    local_cf_ex_start = float(local_cf.iloc[1:].sum()) if len(local_cf) > 1 else 0.0
+                    local_price_component = local_v_end - local_v_start - local_cf_ex_start
+                    price_component = local_price_component * last_fx
+                    fx_component = total_component - price_component - dividend_component
+
+        contribution_pct = (total_component / denom * 100.0) if pd.notna(denom) else np.nan
+
+        rows.append(
+            {
+                "Ticker": ticker,
+                "Price ($)": float(price_component),
+                "Dividend ($)": float(dividend_component),
+                "FX ($)": float(fx_component),
+                "Total ($)": float(total_component),
+                "Contribution (%)": float(contribution_pct) if pd.notna(contribution_pct) else np.nan,
+            }
+        )
+
+    out = pd.DataFrame(rows).set_index("Ticker").sort_values("Total ($)", ascending=False)
+    total_sum = float(out["Total ($)"].sum()) if not out.empty else 0.0
+    if abs(total_sum) > 1e-12:
+        out["Contribution Share of Total (%)"] = (out["Total ($)"] / total_sum) * 100.0
+    else:
+        out["Contribution Share of Total (%)"] = np.nan
+
+    if include_total:
+        total_row = pd.DataFrame(
+            {
+                "Price ($)": [float(out["Price ($)"].sum())],
+                "Dividend ($)": [float(out["Dividend ($)"].sum())],
+                "FX ($)": [float(out["FX ($)"].sum())],
+                "Total ($)": [float(out["Total ($)"].sum())],
+                "Contribution (%)": [
+                    float(out["Total ($)"].sum() / denom * 100.0) if pd.notna(denom) else np.nan
+                ],
+                "Contribution Share of Total (%)": [100.0 if abs(total_sum) > 1e-12 else np.nan],
+            },
+            index=["TOTAL"],
+        )
+        out = pd.concat([out, total_row], axis=0)
+
+    return out
+
+
+def rolling_period_returns(return_series_pct, windows_years=(1, 3, 5), periods_per_year=261):
+    """
+    Compute rolling period returns from a cumulative return series expressed in percent.
+    """
+    if return_series_pct is None:
+        return pd.DataFrame()
+    s = pd.to_numeric(return_series_pct, errors="coerce")
+    if not isinstance(s, pd.Series):
+        s = pd.Series(s)
+    s = s.dropna()
+    if s.empty:
+        return pd.DataFrame(index=getattr(return_series_pct, "index", None))
+
+    growth = (s / 100.0) + 1.0
+    out = pd.DataFrame(index=s.index)
+    for years in windows_years:
+        lookback = int(periods_per_year * years)
+        if len(growth) <= lookback:
+            continue
+        col = f"{years}Y"
+        out[col] = (growth / growth.shift(lookback) - 1.0) * 100.0
+    return out
+
+
+def rolling_return_comparison(
+    portfolio_return_pct,
+    benchmark_return_pct,
+    windows_years=(1, 3, 5),
+    periods_per_year=261,
+):
+    """
+    Build rolling return comparison tables for portfolio and benchmark.
+    """
+    roll_port = rolling_period_returns(
+        portfolio_return_pct, windows_years=windows_years, periods_per_year=periods_per_year
+    )
+    roll_bench = rolling_period_returns(
+        benchmark_return_pct, windows_years=windows_years, periods_per_year=periods_per_year
+    )
+
+    common_idx = roll_port.index.intersection(roll_bench.index)
+    if len(common_idx) > 0:
+        roll_port = roll_port.loc[common_idx]
+        roll_bench = roll_bench.loc[common_idx]
+
+    available_windows = [c for c in roll_port.columns if c in roll_bench.columns]
+    if available_windows:
+        roll_port = roll_port[available_windows]
+        roll_bench = roll_bench[available_windows]
+
+    summary_rows = []
+    for w in available_windows:
+        p = roll_port[w].dropna()
+        b = roll_bench[w].dropna()
+        if p.empty or b.empty:
+            continue
+        p_last = float(p.iloc[-1])
+        b_last = float(b.iloc[-1])
+        summary_rows.append(
+            {
+                "Window": w,
+                "Portfolio (%)": p_last,
+                "Benchmark (%)": b_last,
+                "Excess (%)": p_last - b_last,
+            }
+        )
+
+    summary = pd.DataFrame(summary_rows)
+    return roll_port, roll_bench, summary

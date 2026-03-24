@@ -119,6 +119,73 @@ class PerformanceCalcRegressionTests(unittest.TestCase):
         )
         self.assertEqual(calc._resolve_dwr_resample_freq(wide, "auto", base_rows=100), "W-FRI")
 
+    def test_contribution_analysis_single_ticker_no_fx(self) -> None:
+        idx = pd.date_range("2024-01-01", periods=4, freq="B")
+        val = pd.DataFrame({"AAA": [100.0, 105.0, 110.0, 120.0]}, index=idx)
+        cash_flows = pd.DataFrame({"AAA": [100.0, 0.0, 0.0, 0.0]}, index=idx)
+        div = pd.DataFrame({"AAA": [0.0, 0.0, 1.0, 1.0]}, index=idx)
+
+        out = calc.contribution_analysis(val, cash_flows, div, fx_rates=None)
+        self.assertIn("AAA", out.index)
+        self.assertIn("TOTAL", out.index)
+        self.assertAlmostEqual(float(out.loc["AAA", "Price ($)"]), 20.0, places=6)
+        self.assertAlmostEqual(float(out.loc["AAA", "Dividend ($)"]), 2.0, places=6)
+        self.assertAlmostEqual(float(out.loc["AAA", "FX ($)"]), 0.0, places=6)
+        self.assertAlmostEqual(
+            float(out.loc["AAA", "Total ($)"]),
+            float(out.loc["AAA", "Price ($)"] + out.loc["AAA", "Dividend ($)"] + out.loc["AAA", "FX ($)"]),
+            places=6,
+        )
+
+    def test_contribution_analysis_multi_ticker_with_fx(self) -> None:
+        idx = pd.date_range("2024-01-01", periods=4, freq="B")
+        val = pd.DataFrame(
+            {
+                "AAA": [100.0, 100.0, 100.0, 100.0],
+                "BBB": [200.0, 210.0, 220.0, 230.0],
+            },
+            index=idx,
+        )
+        cash_flows = pd.DataFrame({"AAA": [100.0, 0.0, 0.0, 0.0], "BBB": [200.0, 0.0, 0.0, 0.0]}, index=idx)
+        div = pd.DataFrame({"AAA": [0.0, 0.0, 0.0, 0.0], "BBB": [0.0, 0.0, 0.0, 0.0]}, index=idx)
+        fx_rates = pd.DataFrame(
+            {"AAA": [1.0, 1.1, 1.1, 1.1], "BBB": [1.0, 0.9, 0.9, 0.9]},
+            index=idx,
+        )
+
+        out = calc.contribution_analysis(val, cash_flows, div, fx_rates=fx_rates)
+        self.assertAlmostEqual(float(out.loc["AAA", "FX ($)"]), 10.0, places=6)
+        self.assertAlmostEqual(float(out.loc["BBB", "FX ($)"]), -20.0, places=6)
+        self.assertAlmostEqual(float(out.loc["TOTAL", "Total ($)"]), float(out.drop(index=["TOTAL"])["Total ($)"].sum()), places=6)
+
+    def test_contribution_analysis_zero_start_value_safe(self) -> None:
+        idx = pd.date_range("2024-01-01", periods=3, freq="B")
+        val = pd.DataFrame({"AAA": [0.0, 0.0, 0.0]}, index=idx)
+        cash_flows = pd.DataFrame({"AAA": [0.0, 0.0, 0.0]}, index=idx)
+        div = pd.DataFrame({"AAA": [0.0, 0.0, 0.0]}, index=idx)
+
+        out = calc.contribution_analysis(val, cash_flows, div)
+        self.assertTrue(pd.isna(out.loc["AAA", "Contribution (%)"]))
+
+    def test_rolling_comparison_hides_unavailable_windows(self) -> None:
+        idx = pd.date_range("2024-01-01", periods=300, freq="B")
+        port = pd.Series(np.linspace(0, 20, len(idx)), index=idx)
+        bench = pd.Series(np.linspace(0, 10, len(idx)), index=idx)
+
+        roll_port, roll_bench, summary = calc.rolling_return_comparison(port, bench, windows_years=(1, 3, 5))
+        self.assertIn("1Y", roll_port.columns)
+        self.assertNotIn("3Y", roll_port.columns)
+        self.assertFalse(summary.empty)
+
+    def test_rolling_comparison_benchmark_missing_degrades_gracefully(self) -> None:
+        idx = pd.date_range("2024-01-01", periods=600, freq="B")
+        port = pd.Series(np.linspace(0, 30, len(idx)), index=idx)
+        bench = pd.Series([np.nan] * len(idx), index=idx)
+
+        roll_port, roll_bench, summary = calc.rolling_return_comparison(port, bench)
+        self.assertTrue(roll_bench.empty or roll_bench.dropna(how="all").empty)
+        self.assertTrue(summary.empty)
+
 
 if __name__ == "__main__":
     unittest.main()

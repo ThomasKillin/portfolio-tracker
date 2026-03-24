@@ -10,6 +10,8 @@ import re
 from collections import defaultdict
 import seaborn as sns
 import yfinance as yf
+import plotly.graph_objects as go
+import performance_calcs as calc
 
 # Basic webpage setup
 st.set_page_config(
@@ -177,6 +179,9 @@ def display_calc_details():
         st.markdown('Trailing 12M Dividends = dividend cash received over the last 12 months.')
         st.markdown('TTM Yield on Cost (%) = trailing-12M dividends / cumulative buy cash flows.')
         st.markdown('Lifetime Div/Cost (%) = cumulative dividends / cumulative buy cash flows.')
+        st.markdown('8. **Attribution tab**: per-ticker contribution decomposition into price, dividend, and FX components.')
+        st.markdown('9. **Rolling Returns tab**: rolling 1Y/3Y/5Y portfolio and benchmark comparison.')
+        st.markdown('10. **Diagnostics tab**: provider/FX status plus stale-price and missing-data checks.')
         st.markdown('\nhttps://www.kitces.com/blog/twr-dwr-irr-calculations-performance-reporting-software-methodology-gips-compliance/')
 
 def display_readme():
@@ -345,6 +350,19 @@ def _fetch_upcoming_dividends(tickers):
     for ticker in sorted(set(tickers)):
         try:
             ticker_obj = yf.Ticker(ticker)
+            ticker_currency = None
+            try:
+                meta = share.safe_yf_call(ticker_obj.get_history_metadata) or {}
+                ticker_currency = meta.get("currency")
+            except Exception:
+                ticker_currency = None
+            if not ticker_currency:
+                try:
+                    ticker_currency = share.safe_yf_call(
+                        lambda: ticker_obj.fast_info.get("currency")
+                    )
+                except Exception:
+                    ticker_currency = None
             cal = share.safe_yf_call(lambda: ticker_obj.calendar)
             if isinstance(cal, pd.DataFrame) and not cal.empty:
                 cal_row = cal.iloc[0].to_dict()
@@ -362,6 +380,13 @@ def _fetch_upcoming_dividends(tickers):
                 ex_date = ex_date.tz_localize(None)
             if pd.notna(pay_date) and getattr(pay_date, "tzinfo", None) is not None:
                 pay_date = pay_date.tz_localize(None)
+            div_per_share = pd.to_numeric(
+                cal_row.get(
+                    "Dividend Rate",
+                    cal_row.get("Dividend", cal_row.get("Dividend Value")),
+                ),
+                errors="coerce",
+            )
 
             # Keep only genuinely upcoming calendar entries.
             if pd.notna(ex_date) and ex_date.normalize() >= today:
@@ -369,8 +394,12 @@ def _fetch_upcoming_dividends(tickers):
                 rows.append(
                     {
                         "Ticker": ticker,
+                        "Currency": ticker_currency,
                         "Upcoming Ex-Dividend Date": ex_date,
                         "Upcoming Payment Date": pay_date,
+                        "Upcoming Dividend ($/share)": (
+                            float(div_per_share) if pd.notna(div_per_share) else np.nan
+                        ),
                         "Days to Ex-Div": days_to_ex,
                         "Source": "Calendar",
                     }
@@ -393,6 +422,119 @@ def _fetch_upcoming_dividends(tickers):
             na_position="last",
         ).reset_index(drop=True)
     return upcoming_df, warnings_out
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _fetch_corporate_actions(tickers, start_date):
+    start_ts = pd.Timestamp(start_date)
+    rows = []
+    warnings_out = []
+
+    for ticker in sorted(set(tickers)):
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            actions = share.safe_yf_call(lambda: ticker_obj.actions)
+            if not isinstance(actions, pd.DataFrame) or actions.empty:
+                continue
+
+            actions = actions.copy()
+            actions.index = pd.to_datetime(actions.index, errors="coerce")
+            if getattr(actions.index, "tz", None) is not None:
+                actions.index = actions.index.tz_localize(None)
+            actions = actions[actions.index >= start_ts]
+            if actions.empty:
+                continue
+
+            if "Stock Splits" in actions.columns:
+                split_rows = actions[pd.to_numeric(actions["Stock Splits"], errors="coerce").fillna(0) != 0]
+                for event_date, r in split_rows.iterrows():
+                    split_val = pd.to_numeric(r.get("Stock Splits"), errors="coerce")
+                    rows.append(
+                        {
+                            "Ticker": ticker,
+                            "Event Type": "Split",
+                            "Event Date": pd.Timestamp(event_date).date(),
+                            "Details": f"Split factor: {split_val}",
+                            "Action Needed": "Verify share/cost-base continuity",
+                            "Status": "Open",
+                        }
+                    )
+        except Exception as exc:
+            warnings_out.append(
+                f"{ticker}: corporate actions fetch failed ({type(exc).__name__})."
+            )
+            rows.append(
+                {
+                    "Ticker": ticker,
+                    "Event Type": "Provider",
+                    "Event Date": pd.NaT,
+                    "Details": f"Corporate actions fetch failed ({type(exc).__name__})",
+                    "Action Needed": "Provider check",
+                    "Status": "Open",
+                }
+            )
+
+    actions_df = pd.DataFrame(rows)
+    if not actions_df.empty and "Event Date" in actions_df.columns:
+        actions_df = actions_df.sort_values(
+            by=["Event Date", "Ticker"], ascending=[False, True], na_position="last"
+        ).reset_index(drop=True)
+    return actions_df, warnings_out
+
+
+def _period_return_series(val, cash_flows, div, benchmark_price, benchmark_div, date, mode):
+    init_cf = val.shape == val[date:].shape
+    if mode == "total":
+        portfolio = calc.basic_total_return(
+            val.sum(axis=1),
+            cash_flows.sum(axis=1),
+            div.sum(axis=1),
+            date=date,
+            use_initial_CF=init_cf,
+        ) * 100.0
+        benchmark = calc.basic_total_return(
+            benchmark_price,
+            pd.Series(0.0, index=benchmark_price.index, name=benchmark_price.name),
+            benchmark_div,
+            date=date,
+        ) * 100.0
+    else:
+        portfolio = calc.basic_return(
+            val.sum(axis=1),
+            cash_flows.sum(axis=1),
+            date=date,
+            use_initial_CF=init_cf,
+        ) * 100.0
+        benchmark = calc.basic_return(
+            benchmark_price,
+            pd.Series(0.0, index=benchmark_price.index, name=benchmark_price.name),
+            date=date,
+        ) * 100.0
+    return pd.to_numeric(portfolio, errors="coerce"), pd.to_numeric(benchmark, errors="coerce")
+
+
+def _ticker_diagnostics(price_df, div_df, start_date):
+    price_sel = price_df.loc[start_date:]
+    div_sel = div_df.loc[start_date:]
+    today = pd.Timestamp.today().normalize()
+    rows = []
+    for ticker in sorted(price_sel.columns):
+        price_col = pd.to_numeric(price_sel[ticker], errors="coerce")
+        div_col = pd.to_numeric(div_sel[ticker], errors="coerce") if ticker in div_sel.columns else pd.Series(index=price_col.index, dtype=float)
+        last_valid = price_col.last_valid_index()
+        stale_days = np.nan
+        if last_valid is not None:
+            stale_days = np.busday_count(last_valid.date(), today.date())
+        rows.append(
+            {
+                "Ticker": ticker,
+                "Last Price Date": last_valid.date() if last_valid is not None else "",
+                "Stale (business days)": float(stale_days) if pd.notna(stale_days) else np.nan,
+                "Price Missing (%)": float(price_col.isna().mean() * 100.0),
+                "Dividend Missing (%)": float(div_col.isna().mean() * 100.0),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def display_data():
@@ -487,6 +629,8 @@ def display_data():
                     "val": val,
                     "cash_flows": cash_flows,
                     "price": price,
+                    "benchmark_price": benchmark_price,
+                    "benchmark_div": benchmark_div,
                     "accum": accum,
                     "shares": shares,
                     "div": div,
@@ -523,6 +667,8 @@ def display_data():
         val = cache["val"]
         cash_flows = cache["cash_flows"]
         price = cache["price"]
+        benchmark_price = cache["benchmark_price"]
+        benchmark_div = cache["benchmark_div"]
         div = cache["div"]
         div_ = cache["div_"]
         accum = cache["accum"]
@@ -535,9 +681,22 @@ def display_data():
         benchmark_status = cache.get("benchmark_status", {"selected": benchmark_ticker, "available": False})
         summary_basic = cache["summary_basic"]
         summary_total = cache["summary_total"]
+        tickers = sorted(list(val.columns))
+        actions_df, actions_warnings = _fetch_corporate_actions(
+            tuple(tickers), st.session_state['start_date']
+        )
         
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-            ['Portfolio Returns', 'Stock Returns', 'Stock details', 'Dividend Metrics', 'Dividend Schedule', 'Diagnostics']
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+            [
+                'Portfolio Returns',
+                'Stock Returns',
+                'Stock details',
+                'Dividend Metrics',
+                'Dividend Schedule',
+                'Attribution',
+                'Rolling Returns',
+                'Diagnostics',
+            ]
         )
         
         with tab1:
@@ -770,14 +929,13 @@ def display_data():
                     _render_plotly(fig_div_annual)
 
         with tab5:
-            tickers = sorted(list(val.columns))
             summary_df, schedule_df, sched_warnings = _fetch_dividend_schedule(
                 tuple(tickers),
                 st.session_state['start_date'],
             )
             upcoming_df, upcoming_warnings = _fetch_upcoming_dividends(tuple(tickers))
 
-            provider_notes = list(sched_warnings) + list(upcoming_warnings)
+            provider_notes = list(sched_warnings) + list(upcoming_warnings) + list(actions_warnings)
             if provider_notes:
                 with st.expander("Provider notes", expanded=False):
                     for msg in provider_notes:
@@ -857,12 +1015,12 @@ def display_data():
                     _render_dataframe(styled_schedule_summary)
 
                 if not upcoming_df.empty:
-                    if (
-                        "Upcoming Payment Date" in upcoming_df.columns
-                        and upcoming_df["Upcoming Payment Date"].isna().all()
-                    ):
-                        upcoming_df = upcoming_df.drop(columns=["Upcoming Payment Date"])
                     upcoming_view = upcoming_df.copy()
+                    if (
+                        "Upcoming Payment Date" in upcoming_view.columns
+                        and upcoming_view["Upcoming Payment Date"].isna().all()
+                    ):
+                        upcoming_view = upcoming_view.drop(columns=["Upcoming Payment Date"])
                     upcoming_view["Upcoming Ex-Dividend Date"] = pd.to_datetime(
                         upcoming_view["Upcoming Ex-Dividend Date"], errors="coerce"
                     ).dt.date
@@ -870,15 +1028,74 @@ def display_data():
                         upcoming_view["Upcoming Payment Date"] = pd.to_datetime(
                             upcoming_view["Upcoming Payment Date"], errors="coerce"
                         ).dt.date
+                    upcoming_view["Shares Held (Ex-Date)"] = 0.0
+                    for ticker in upcoming_view["Ticker"].unique():
+                        if ticker in accum.columns:
+                            tmask = upcoming_view["Ticker"] == ticker
+                            ex_dates = pd.to_datetime(
+                                upcoming_view.loc[tmask, "Upcoming Ex-Dividend Date"], errors="coerce"
+                            )
+                            holdings = (
+                                pd.to_numeric(accum[ticker], errors="coerce")
+                                .reindex(ex_dates, method="ffill")
+                                .fillna(0.0)
+                                .values
+                            )
+                            upcoming_view.loc[tmask, "Shares Held (Ex-Date)"] = holdings
+                    if "Upcoming Dividend ($/share)" in upcoming_view.columns:
+                        upcoming_view["Expected Dividend Cash ($)"] = (
+                            pd.to_numeric(upcoming_view["Upcoming Dividend ($/share)"], errors="coerce")
+                            * pd.to_numeric(upcoming_view["Shares Held (Ex-Date)"], errors="coerce")
+                        )
                     st.markdown("##### Upcoming Dividends")
                     st.caption(subtitle_text)
+                    upcoming_view = upcoming_view.replace({None: np.nan})
+                    display_cols = [
+                        c
+                        for c in ["Upcoming Dividend ($/share)", "Expected Dividend Cash ($)"]
+                        if c in upcoming_view.columns
+                    ]
+                    for c in display_cols:
+                        upcoming_view[c] = pd.to_numeric(upcoming_view[c], errors="coerce")
+                        upcoming_view[c] = upcoming_view[c].map(
+                            lambda x: "Missing from provider" if pd.isna(x) else x
+                        )
                     _render_dataframe(
                         upcoming_view.style.format(
                             {
                                 "Days to Ex-Div": "{:.0f}",
+                                "Shares Held (Ex-Date)": "{:.2f}",
                             }
                         )
                     )
+                    if "Expected Dividend Cash ($)" in upcoming_view.columns:
+                        ex_dates = pd.to_datetime(
+                            upcoming_view["Upcoming Ex-Dividend Date"], errors="coerce"
+                        )
+                        expected_cash = pd.to_numeric(
+                            upcoming_view["Expected Dividend Cash ($)"], errors="coerce"
+                        ).fillna(0.0)
+                        now_norm = pd.Timestamp.today().normalize()
+                        next_30 = expected_cash[(ex_dates >= now_norm) & (ex_dates <= now_norm + pd.Timedelta(days=30))].sum()
+                        next_90 = expected_cash[(ex_dates >= now_norm) & (ex_dates <= now_norm + pd.Timedelta(days=90))].sum()
+                        future_income_summary = pd.DataFrame(
+                            [
+                                {
+                                    "Confirmed events": int(len(upcoming_view)),
+                                    "Expected cash next 30d ($)": float(next_30),
+                                    "Expected cash next 90d ($)": float(next_90),
+                                }
+                            ]
+                        )
+                        st.markdown("##### Future Income Summary")
+                        _render_dataframe(
+                            future_income_summary.style.format(
+                                {
+                                    "Expected cash next 30d ($)": "{:.2f}",
+                                    "Expected cash next 90d ($)": "{:.2f}",
+                                }
+                            )
+                        )
 
                 if not schedule_df.empty:
                     ticker_options = ["ALL"] + sorted(schedule_work["Ticker"].unique().tolist())
@@ -950,6 +1167,150 @@ def display_data():
                     )
 
         with tab6:
+            contrib_scope_options = ["TOTAL"] + sorted(list(val.columns))
+            if (
+                "contrib_scope" in st.session_state
+                and st.session_state["contrib_scope"] not in contrib_scope_options
+            ):
+                st.session_state["contrib_scope"] = "TOTAL"
+            contrib_scope = st.selectbox(
+                "Attribution scope",
+                options=contrib_scope_options,
+                index=0,
+                key="contrib_scope",
+            )
+
+            if contrib_scope == "TOTAL":
+                val_attr = val
+                cf_attr = cash_flows
+                div_attr = div
+                fx_attr = fx_rates
+            else:
+                val_attr = val[[contrib_scope]]
+                cf_attr = cash_flows[[contrib_scope]]
+                div_attr = div[[contrib_scope]] if contrib_scope in div.columns else pd.DataFrame(
+                    {contrib_scope: 0.0}, index=val.index
+                )
+                fx_attr = (
+                    fx_rates[[contrib_scope]]
+                    if isinstance(fx_rates, pd.DataFrame) and contrib_scope in fx_rates.columns
+                    else None
+                )
+
+            contrib_df = calc.contribution_analysis(
+                val_attr,
+                cf_attr,
+                div_attr,
+                fx_rates=fx_attr,
+                date=st.session_state["start_date"],
+                include_total=True,
+            )
+            st.markdown("##### Contribution Analysis")
+            st.caption(subtitle_text)
+            _render_dataframe(
+                contrib_df.style.format(
+                    {
+                        "Price ($)": "{:.2f}",
+                        "Dividend ($)": "{:.2f}",
+                        "FX ($)": "{:.2f}",
+                        "Total ($)": "{:.2f}",
+                        "Contribution (%)": "{:.2f}",
+                        "Contribution Share of Total (%)": "{:.2f}",
+                    },
+                    na_rep="",
+                )
+            )
+
+            core = contrib_df.drop(index=["TOTAL"], errors="ignore").copy()
+            if not core.empty:
+                top_n = min(8, len(core))
+                plot_df = pd.concat(
+                    [core.nlargest(top_n, "Total ($)"), core.nsmallest(top_n, "Total ($)")]
+                ).drop_duplicates()
+                plot_df = plot_df.sort_values("Total ($)", ascending=True)
+                bar_colors = np.where(
+                    pd.to_numeric(plot_df["Total ($)"], errors="coerce") >= 0,
+                    "rgb(71, 157, 201)",
+                    "rgb(220, 82, 88)",
+                )
+                fig_attr = go.Figure()
+                fig_attr.add_trace(
+                    go.Bar(
+                        x=plot_df["Total ($)"],
+                        y=plot_df.index.astype(str),
+                        name="Total Contribution ($)",
+                        marker_color=bar_colors,
+                        orientation="h",
+                    )
+                )
+                fig_attr.update_layout(
+                    title={"text": "Top Contributors / Detractors", "x": 0.5},
+                    xaxis_title="Contribution ($)",
+                    yaxis_title="Ticker",
+                    margin=dict(l=50, r=30, t=70, b=60),
+                )
+                _render_plotly(fig_attr)
+
+        with tab7:
+            rolling_mode = st.toggle(
+                "Use total return for rolling windows",
+                value=True,
+                key="rolling_total_mode",
+            )
+            mode = "total" if rolling_mode else "basic"
+            p_ret, b_ret = _period_return_series(
+                val,
+                cash_flows,
+                div,
+                benchmark_price,
+                benchmark_div,
+                st.session_state["start_date"],
+                mode=mode,
+            )
+            roll_port, roll_bench, roll_summary = calc.rolling_return_comparison(
+                p_ret, b_ret, windows_years=(1, 3, 5), periods_per_year=261
+            )
+
+            st.markdown("##### Rolling Return Summary")
+            st.caption(subtitle_text)
+            if roll_summary.empty:
+                st.info("Not enough history for rolling 1Y/3Y/5Y windows.")
+            else:
+                _render_dataframe(
+                    roll_summary.style.format(
+                        {"Portfolio (%)": "{:.2f}", "Benchmark (%)": "{:.2f}", "Excess (%)": "{:.2f}"}
+                    )
+                )
+
+            if not roll_port.empty and not roll_bench.empty:
+                fig_roll = go.Figure()
+                for w in roll_port.columns:
+                    fig_roll.add_trace(
+                        go.Scatter(
+                            x=roll_port.index,
+                            y=roll_port[w],
+                            mode="lines",
+                            name=f"Portfolio {w}",
+                        )
+                    )
+                    fig_roll.add_trace(
+                        go.Scatter(
+                            x=roll_bench.index,
+                            y=roll_bench[w],
+                            mode="lines",
+                            name=f"Benchmark {w}",
+                            line=dict(dash="dot"),
+                        )
+                    )
+                fig_roll.update_layout(
+                    title={"text": "Rolling Returns (1Y/3Y/5Y)", "x": 0.5},
+                    xaxis_title="Date",
+                    yaxis_title="Return (%)",
+                    margin=dict(l=50, r=30, t=70, b=50),
+                )
+                _render_plotly(fig_roll)
+
+        with tab8:
             st.markdown("##### Data Provider Status")
             provider_diag = st.session_state.get("provider_diagnostics", {})
             provider_rows = [
@@ -969,6 +1330,19 @@ def display_data():
                 ).sort_values("Ticker")
                 st.markdown("##### Provider Failures")
                 _render_dataframe(failed_df)
+
+            st.markdown("##### Ticker Data Quality")
+            ticker_diag = _ticker_diagnostics(price, div_, st.session_state["start_date"])
+            _render_dataframe(
+                ticker_diag.style.format(
+                    {
+                        "Stale (business days)": "{:.0f}",
+                        "Price Missing (%)": "{:.2f}",
+                        "Dividend Missing (%)": "{:.2f}",
+                    },
+                    na_rep="",
+                )
+            )
 
             st.markdown("##### FX Conversion Status")
             fx_diag = st.session_state.get("fx_diagnostics", {})
@@ -998,10 +1372,85 @@ def display_data():
                         "Selected Benchmark": benchmark_status.get("selected", index),
                         "Available in Price Data": benchmark_status.get("available", False),
                         "Start Date": str(st.session_state['start_date'].date()) if isinstance(st.session_state.get('start_date'), pd.Timestamp) else str(st.session_state.get('start_date')),
+                        "Benchmark Last Date": (
+                            benchmark_price.dropna().index.max().date()
+                            if isinstance(benchmark_price, pd.Series) and not benchmark_price.dropna().empty
+                            else ""
+                        ),
+                        "Benchmark Missing (%)": (
+                            float(pd.to_numeric(benchmark_price, errors="coerce").isna().mean() * 100.0)
+                            if isinstance(benchmark_price, pd.Series) and len(benchmark_price) > 0
+                            else np.nan
+                        ),
                     }
                 ]
             )
-            _render_dataframe(bench_diag)
+            _render_dataframe(
+                bench_diag.style.format({"Benchmark Missing (%)": "{:.2f}"}, na_rep="")
+            )
+
+            action_queue = actions_df.copy() if isinstance(actions_df, pd.DataFrame) else pd.DataFrame()
+            if 'upcoming_df' in locals() and isinstance(upcoming_df, pd.DataFrame) and not upcoming_df.empty:
+                if "Upcoming Payment Date" in upcoming_df.columns:
+                    missing_payment = upcoming_df["Upcoming Payment Date"].isna()
+                else:
+                    missing_payment = pd.Series(True, index=upcoming_df.index)
+                if "Upcoming Dividend ($/share)" in upcoming_df.columns:
+                    missing_amount = upcoming_df["Upcoming Dividend ($/share)"].isna()
+                else:
+                    missing_amount = pd.Series(True, index=upcoming_df.index)
+                missing_mask = missing_payment | missing_amount
+                missing_rows = upcoming_df[missing_mask].copy()
+                if not missing_rows.empty:
+                    missing_rows["Event Type"] = "Upcoming Dividend"
+                    missing_rows["Event Date"] = pd.to_datetime(
+                        missing_rows["Upcoming Ex-Dividend Date"], errors="coerce"
+                    ).dt.date
+                    missing_rows["Details"] = (
+                        "Missing "
+                        + np.where(
+                            (
+                                missing_rows["Upcoming Payment Date"].isna()
+                                if "Upcoming Payment Date" in missing_rows.columns
+                                else True
+                            ),
+                            "payment date",
+                            "",
+                        )
+                        + np.where(
+                            (
+                                missing_rows["Upcoming Dividend ($/share)"].isna()
+                                if "Upcoming Dividend ($/share)" in missing_rows.columns
+                                else True
+                            ),
+                            np.where(
+                                (
+                                    missing_rows["Upcoming Payment Date"].isna()
+                                    if "Upcoming Payment Date" in missing_rows.columns
+                                    else True
+                                ),
+                                " & amount",
+                                "amount",
+                            ),
+                            "",
+                        )
+                    )
+                    missing_rows["Action Needed"] = "Verify with broker"
+                    missing_rows["Status"] = "Open"
+                    queue_cols = ["Ticker", "Event Type", "Event Date", "Details", "Action Needed", "Status"]
+                    action_queue = pd.concat(
+                        [action_queue, missing_rows[queue_cols]], ignore_index=True
+                    )
+
+            st.markdown("##### Corporate Action Queue")
+            if action_queue.empty:
+                st.info("No action items detected.")
+            else:
+                if "Event Date" in action_queue.columns:
+                    action_queue = action_queue.sort_values(
+                        by=["Event Date", "Ticker"], ascending=[False, True], na_position="last"
+                    )
+                _render_dataframe(action_queue)
 
         display_calc_details()
             
